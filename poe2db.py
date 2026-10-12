@@ -1,4 +1,4 @@
-"""Small, bounded reader for the Traditional Chinese PoE2DB site."""
+"""Small, bounded reader for the Simplified and Traditional Chinese PoE2DB sites."""
 
 from __future__ import annotations
 
@@ -13,9 +13,13 @@ from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
 
-BASE_URL = "https://poe2db.tw/tw/"
+BASE_URLS = {
+    "cn": "https://poe2db.tw/cn/",
+    "tw": "https://poe2db.tw/tw/",
+}
+PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.0 (+https://poe2db.tw/tw/)"
+USER_AGENT = "AstrBot-PoE2DB/1.1 (+https://poe2db.tw/)"
 
 
 class Poe2DBError(RuntimeError):
@@ -29,8 +33,10 @@ class Source:
     text: str
 
 
-def search_url(term: str) -> str:
-    return BASE_URL + "search?" + urlencode({"q": term})
+def search_url(term: str, locale: str = "cn") -> str:
+    if locale not in BASE_URLS:
+        raise ValueError(f"Unsupported Poe2DB locale: {locale}")
+    return BASE_URLS[locale] + "search?" + urlencode({"q": term})
 
 
 def parse_query_terms(model_text: str, question: str) -> list[str]:
@@ -81,12 +87,12 @@ class Poe2DBClient:
             and parts.hostname == "poe2db.tw"
             and parts.port is None
             and parts.username is None
-            and parts.path.startswith("/tw/")
+            and any(parts.path.startswith(f"/{locale}/") for locale in BASE_URLS)
         )
 
     def _download_sync(self, url: str) -> str:
         if not self._allowed(url):
-            raise Poe2DBError("只允许读取 poe2db.tw/tw 页面")
+            raise Poe2DBError("只允许读取 poe2db.tw/cn 或 /tw 页面")
         request = Request(
             url,
             headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
@@ -135,7 +141,10 @@ class Poe2DBClient:
         if not cls._allowed(full):
             return None
         parts = urlsplit(full)
-        if parts.path == "/tw/search":
+        locale = urlsplit(base).path.split("/", 2)[1]
+        if locale not in BASE_URLS or not parts.path.startswith(f"/{locale}/"):
+            return None
+        if parts.path == f"/{locale}/search":
             return None
         return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
@@ -187,46 +196,69 @@ class Poe2DBClient:
             return text
         return text[:max_chars].rsplit(" ", 1)[0]
 
+    @classmethod
+    def _source_from_page(
+        cls, soup: BeautifulSoup, url: str, max_chars: int
+    ) -> Source | None:
+        title = cls._title(soup)
+        cls._check_challenge(title)
+        if not title or title.casefold() in {"家园", "首页", "家園", "首頁", "home", "search"}:
+            return None
+        # Text extraction rewrites table rows and can remove the self-link.
+        canonical = cls._canonical_url(soup, title, url)
+        text = cls._extract_text(soup, max_chars)
+        if not text:
+            return None
+        return Source(title, canonical, text)
+
+    async def _search_term(self, term: str, locale: str, max_chars: int) -> list[Source]:
+        url = search_url(term, locale)
+        soup = BeautifulSoup(await self._fetch(url), "html.parser")
+        title = self._title(soup)
+        self._check_challenge(title)
+        if title.casefold() != "search":
+            source = self._source_from_page(soup, url, max_chars)
+            return [source] if source else []
+
+        sources: list[Source] = []
+        for candidate in self._result_urls(soup, url):
+            try:
+                page = BeautifulSoup(await self._fetch(candidate), "html.parser")
+                source = self._source_from_page(page, candidate, max_chars)
+            except Poe2DBError:
+                continue
+            if source:
+                sources.append(source)
+        return sources
+
+    @staticmethod
+    def _source_key(url: str) -> str:
+        parts = urlsplit(url)
+        slug = parts.path.split("/", 2)[2]
+        return slug.casefold() + ("?" + parts.query if parts.query else "")
+
     async def find_sources(
         self, terms: list[str], max_sources: int = 2, max_chars: int = 5000
     ) -> list[Source]:
         sources: list[Source] = []
-        candidate_urls: list[str] = []
         seen: set[str] = set()
+        successful_searches = 0
         for term in terms[:2]:
-            url = search_url(term)
-            soup = BeautifulSoup(await self._fetch(url), "html.parser")
-            title = self._title(soup)
-            self._check_challenge(title)
-            if not title or title.casefold() in {"家園", "首頁", "home"}:
-                continue
-            if title.casefold() == "search":
-                for candidate in self._result_urls(soup, url):
-                    if candidate not in candidate_urls:
-                        candidate_urls.append(candidate)
-                continue
-            canonical = self._canonical_url(soup, title, url)
-            text = self._extract_text(soup, max_chars)
-            if text and canonical not in seen:
-                sources.append(Source(title, canonical, text))
-                seen.add(canonical)
-            if len(sources) >= max_sources:
-                return sources
-
-        for url in candidate_urls:
-            if len(sources) >= max_sources:
-                break
-            try:
-                soup = BeautifulSoup(await self._fetch(url), "html.parser")
-            except Poe2DBError:
-                continue
-            title = self._title(soup)
-            self._check_challenge(title)
-            if not title or title.casefold() in {"家園", "首頁", "home", "search"}:
-                continue
-            canonical = self._canonical_url(soup, title, url)
-            text = self._extract_text(soup, max_chars)
-            if text and canonical not in seen:
-                sources.append(Source(title, canonical, text))
-                seen.add(canonical)
+            for locale in PREFERRED_LOCALES:
+                try:
+                    found = await self._search_term(term, locale, max_chars)
+                except Poe2DBError:
+                    continue
+                successful_searches += 1
+                for source in found:
+                    key = self._source_key(source.url)
+                    if key not in seen:
+                        sources.append(source)
+                        seen.add(key)
+                    if len(sources) >= max_sources:
+                        return sources
+                if found:
+                    break
+        if not sources and not successful_searches:
+            raise Poe2DBError("简体与繁体资料页均无法读取")
         return sources

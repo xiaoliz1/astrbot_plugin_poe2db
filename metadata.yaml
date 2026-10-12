@@ -1,8 +1,8 @@
 name: astrbot_plugin_poe2db
 display_name: 流放之路2资料问答
-short_desc: 检索 poe2db.tw/tw 并回答流放之路2问题。
-desc: 使用当前 AstrBot 聊天模型整理 poe2db.tw/tw 的页面内容，回答时附上资料链接。
-version: v1.0.0
+short_desc: 检索 Poe2DB 简体和繁体中文站，回答流放之路2问题。
+desc: 优先使用 poe2db.tw/cn，必要时回退 poe2db.tw/tw，并在回答时附上资料链接。
+version: v1.1.0
 author: xiaoliz1
 repo: https://github.com/xiaoliz1/astrbot_plugin_poe2db
 astrbot_version: ">=4.5.7,<5"
