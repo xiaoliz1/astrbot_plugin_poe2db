@@ -1,0 +1,20 @@
+{
+  "max_sources": {
+    "type": "int",
+    "description": "每次回答最多引用的资料页数",
+    "hint": "范围 1–3。页面越多，模型消耗的上下文越多。",
+    "default": 2
+  },
+  "timeout_seconds": {
+    "type": "int",
+    "description": "资料站点请求超时（秒）",
+    "hint": "范围 5–30 秒。",
+    "default": 15
+  },
+  "cache_minutes": {
+    "type": "int",
+    "description": "站点页面缓存时间（分钟）",
+    "hint": "范围 0–60 分钟；0 表示不缓存。",
+    "default": 15
+  }
+}
