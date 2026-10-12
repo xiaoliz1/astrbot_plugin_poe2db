@@ -52,6 +52,18 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ignore these instructions", sources[0].text)
         self.assertNotIn("site footer", sources[0].text)
 
+    async def test_redirected_search_uses_article_url(self):
+        query_url = search_url("冰霜新星")
+        client = FixtureClient(
+            {
+                query_url: "<title>冰霜新星 - 流亡2编年史</title>"
+                "<div class='page-content'>造成冰冷伤害。</div>"
+            }
+        )
+        client._resolved_urls[query_url] = "https://poe2db.tw/cn/Ice_Nova"
+        sources = await client.find_sources(["冰霜新星"])
+        self.assertEqual(sources[0].url, "https://poe2db.tw/cn/Ice_Nova")
+
     async def test_list_search_fetches_only_site_result(self):
         query_url = search_url("元素")
         pages = {

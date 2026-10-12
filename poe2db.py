@@ -19,7 +19,7 @@ BASE_URLS = {
 }
 PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.1 (+https://poe2db.tw/)"
+USER_AGENT = "AstrBot-PoE2DB/1.2 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 
 
 class Poe2DBError(RuntimeError):
@@ -72,11 +72,51 @@ def parse_query_terms(model_text: str, question: str) -> list[str]:
     return [fallback.strip()[:40] or question.strip()[:40]]
 
 
+def parse_multilingual_terms(model_text: str, question: str) -> tuple[list[str], list[str]]:
+    """Return up to two main names and their Traditional/English equivalents."""
+    match = re.search(r"\{[\s\S]*\}", model_text or "")
+    try:
+        parsed = json.loads(match.group(0)) if match else None
+    except (ValueError, TypeError):
+        parsed = None
+    if not isinstance(parsed, dict):
+        fallback = parse_query_terms(model_text, question)
+        return fallback, fallback
+
+    by_locale: dict[str, list[str]] = {}
+    for locale in ("zh", "tw", "en"):
+        values = parsed.get(locale, [])
+        if isinstance(values, str):
+            values = [values]
+        if not isinstance(values, list):
+            values = []
+        cleaned: list[str] = []
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            name = re.sub(r"\s+", " ", value).strip(" \t\r\n,，。？?\"'「」")
+            if name and len(name) <= 40 and "://" not in name and name not in cleaned:
+                cleaned.append(name)
+            if len(cleaned) == 2:
+                break
+        by_locale[locale] = cleaned
+
+    primary = by_locale["zh"] or by_locale["tw"] or by_locale["en"]
+    if not primary:
+        primary = parse_query_terms("", question)
+    names: list[str] = []
+    for name in primary + by_locale["tw"] + by_locale["en"]:
+        if name not in names:
+            names.append(name)
+    return primary[:2], names[:6]
+
+
 class Poe2DBClient:
     def __init__(self, timeout_seconds: int = 15, cache_seconds: int = 900):
         self.timeout_seconds = timeout_seconds
         self.cache_seconds = cache_seconds
         self._cache: dict[str, tuple[float, str]] = {}
+        self._resolved_urls: dict[str, str] = {}
         self._semaphore = asyncio.Semaphore(2)
 
     @staticmethod
@@ -90,7 +130,7 @@ class Poe2DBClient:
             and any(parts.path.startswith(f"/{locale}/") for locale in BASE_URLS)
         )
 
-    def _download_sync(self, url: str) -> str:
+    def _download_sync(self, url: str) -> tuple[str, str]:
         if not self._allowed(url):
             raise Poe2DBError("只允许读取 poe2db.tw/cn 或 /tw 页面")
         request = Request(
@@ -99,7 +139,8 @@ class Poe2DBClient:
         )
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
-                if not self._allowed(response.geturl()):
+                resolved_url = response.geturl()
+                if not self._allowed(resolved_url):
                     raise Poe2DBError("站点跳转到了指定资料范围以外")
                 if response.headers.get_content_type() != "text/html":
                     raise Poe2DBError("站点返回的不是 HTML 页面")
@@ -110,7 +151,7 @@ class Poe2DBClient:
             raise Poe2DBError("连接资料站点失败或超时") from exc
         if len(data) > MAX_RESPONSE_BYTES:
             raise Poe2DBError("资料页面过大，已停止读取")
-        return data.decode("utf-8", errors="replace")
+        return resolved_url, data.decode("utf-8", errors="replace")
 
     async def _fetch(self, url: str) -> str:
         now = time.monotonic()
@@ -118,10 +159,13 @@ class Poe2DBClient:
         if cached and cached[0] > now:
             return cached[1]
         async with self._semaphore:
-            html = await asyncio.to_thread(self._download_sync, url)
+            resolved_url, html = await asyncio.to_thread(self._download_sync, url)
+        self._resolved_urls[url] = resolved_url
         self._cache[url] = (time.monotonic() + self.cache_seconds, html)
         if len(self._cache) > 64:
-            self._cache.pop(next(iter(self._cache)))
+            old_url = next(iter(self._cache))
+            self._cache.pop(old_url)
+            self._resolved_urls.pop(old_url, None)
         return html
 
     @staticmethod
@@ -214,17 +258,20 @@ class Poe2DBClient:
     async def _search_term(self, term: str, locale: str, max_chars: int) -> list[Source]:
         url = search_url(term, locale)
         soup = BeautifulSoup(await self._fetch(url), "html.parser")
+        resolved_url = self._resolved_urls.get(url, url)
         title = self._title(soup)
         self._check_challenge(title)
         if title.casefold() != "search":
-            source = self._source_from_page(soup, url, max_chars)
+            source = self._source_from_page(soup, resolved_url, max_chars)
             return [source] if source else []
 
         sources: list[Source] = []
         for candidate in self._result_urls(soup, url):
             try:
                 page = BeautifulSoup(await self._fetch(candidate), "html.parser")
-                source = self._source_from_page(page, candidate, max_chars)
+                source = self._source_from_page(
+                    page, self._resolved_urls.get(candidate, candidate), max_chars
+                )
             except Poe2DBError:
                 continue
             if source:
