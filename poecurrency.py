@@ -6,19 +6,19 @@ import asyncio
 import json
 import math
 import time
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .economy import CurrencyRow, CurrencySnapshot, EconomyError
+from .economy import CurrencyRow, CurrencySnapshot, EconomyError, currency_key
 
 SUMMARY_URL = "https://poecurrency.top/api/summary?version=2"
-USER_AGENT = "AstrBot-PoE2DB/1.5 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.6 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 4_000_000
 CACHE_SECONDS = 3600
-IMAGE_ROWS = 24
 CURRENCY_UNITS = {
     "c": "混沌石",
     "e": "崇高石",
@@ -57,6 +57,7 @@ def parse_national_summary(payload: object) -> CurrencySnapshot:
         if not isinstance(item, dict) or item.get("error") is True:
             continue
         name = item.get("item_name")
+        english_name = item.get("engname")
         unit = CURRENCY_UNITS.get(item.get("currency_unit"))
         if not isinstance(name, str) or not name or not unit:
             continue
@@ -75,6 +76,7 @@ def parse_national_summary(payload: object) -> CurrencySnapshot:
                 sell_value=max(0.0, sell),
                 sell_change_percent=sell_change,
                 unit_label=unit,
+                sort_key=currency_key(english_name) if isinstance(english_name, str) else "",
             )
         )
         timestamp = item.get("latest_datetime")
@@ -86,13 +88,31 @@ def parse_national_summary(payload: object) -> CurrencySnapshot:
     return CurrencySnapshot(
         league="当前赛季",
         reference="",
-        rows=tuple(rows[:IMAGE_ROWS]),
+        rows=tuple(rows),
         total_count=len(rows),
         generated_at=_now_text(),
         market="国服",
         category_label=category["category_label"],
         source_updated_at=max(timestamps) if timestamps else None,
     )
+
+
+def sort_national_snapshot(
+    snapshot: CurrencySnapshot, international_rows: Sequence[CurrencyRow]
+) -> CurrencySnapshot:
+    """Order shared national currencies by poe.ninja's live ranking."""
+    rank: dict[str, int] = {}
+    for index, row in enumerate(international_rows):
+        if row.sort_key:
+            rank.setdefault(row.sort_key, index)
+    rows = tuple(
+        row
+        for _, row in sorted(
+            enumerate(snapshot.rows),
+            key=lambda pair: (rank.get(pair[1].sort_key, len(rank)), pair[0]),
+        )
+    )
+    return replace(snapshot, rows=rows)
 
 
 class _AllowedRedirects(HTTPRedirectHandler):

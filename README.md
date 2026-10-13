@@ -13,7 +13,7 @@ git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 
 插件代码需要 Python 3.10 或更新版本。AstrBot 会按 `requirements.txt` 安装 `beautifulsoup4`；当前会话还需要配置可用的聊天模型。
 
-已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.5.0`。
+已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.6.0`。
 
 ## 使用
 
@@ -39,9 +39,9 @@ git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 
 `/poe2 国际服物价` 使用 [poe.ninja 的公开 PoE2 经济接口](https://poe.ninja/docs/api)：先查询当前挑战赛季，再读取该赛季的通货估价，不依赖网址中的 `forbiddenrites` 等赛季路径。图片最多展示估价排名前 24 的通货、相对当前基准通货的价格和 7 天变化。通货名与价格单位从 [Poe2DB 简体中文通货页](https://poe2db.tw/cn/Currency_Exchange) 实时读取；赛季中文名按 [Poe2DB 赛季页](https://poe2db.tw/cn/League) 对照版本取得。若某种通货缺少中文名称，图片会略过该行；若赛季中文名暂时缺失，图片会显示“当前赛季”。价格数据最多缓存 30 分钟，赛季列表最多缓存 5 分钟。
 
-`/poe2 国服物价` 使用 [poecurrency.top 的公开 API](https://poecurrency.top/api.html)，查询国服当前赛季“通货仓库”分类，图片显示最多 24 种通货的买入均价、卖出均价及当日涨跌。价格单位按物品显示为混沌石、崇高石或神圣石。该 API 由公开市场信息 OCR 整理，数据可能有异常，插件过滤源站标记异常的记录，并按源站建议缓存 1 小时。两种物价命令都不需要聊天模型，但 AstrBot 的 HTML 图片渲染服务需要可用。价格仅供参考；poecurrency.top 说明其服务仅供个人非商业使用。
+`/poe2 国服物价` 使用 [poecurrency.top 的公开 API](https://poecurrency.top/api.html)，查询国服当前赛季“通货仓库”分类，图片显示最多 24 种通货的买入均价、卖出均价及当日涨跌。价格单位按物品显示为混沌石、崇高石或神圣石。共有通货按 poe.ninja 当前国际服估价顺序排列，国服独有通货排在后面；因此生成国服物价时也需要读取国际服排行，若该排行暂时不可用会提示稍后重试。名称排序通过两边数据自带的英文物品名匹配，不维护静态名称对照表。该 API 由公开市场信息 OCR 整理，数据可能有异常，插件过滤源站标记异常的记录，并按源站建议缓存 1 小时。两种物价命令都不需要聊天模型，但 AstrBot 的 HTML 图片渲染服务需要可用。价格仅供参考；poecurrency.top 说明其服务仅供个人非商业使用。
 
-普通问答只按需读取 Poe2DB 与 PoE2Wiki；国际服物价图片从 poe.ninja 读取价格、从 Poe2DB 读取中文名称；国服物价图片从 poecurrency.top 获取价格和名称。插件不随仓库打包站点数据库或名称对照表。
+普通问答只按需读取 Poe2DB 与 PoE2Wiki；国际服物价图片从 poe.ninja 读取价格、从 Poe2DB 读取中文名称；国服物价图片从 poecurrency.top 获取价格和中文名称，并从 poe.ninja 读取当前通货顺序。插件不随仓库打包站点数据库或名称对照表。
 
 ## 开发与资料依据
 

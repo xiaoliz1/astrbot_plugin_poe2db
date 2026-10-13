@@ -17,7 +17,7 @@ from .economy import (
     render_currency_html,
 )
 from .poe2db import Poe2DBClient, Poe2DBError, Source, parse_multilingual_terms, search_url
-from .poecurrency import PoECurrencyClient
+from .poecurrency import PoECurrencyClient, sort_national_snapshot
 from .wiki import WikiClient, WikiSourceError, wiki_names_from_poe2db
 
 
@@ -38,7 +38,7 @@ def _question_from_message(message: str) -> str:
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.5.0",
+    "1.6.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -105,14 +105,24 @@ class Poe2DBPlugin(Star):
             return
 
         if question in ("国服物价", "國服物價"):
-            try:
-                snapshot = await self.national_economy.current_currency()
-            except EconomyError:
+            national_result, international_result = await asyncio.gather(
+                self.national_economy.current_currency(),
+                self.economy.current_currency(),
+                return_exceptions=True,
+            )
+            if isinstance(national_result, Exception):
                 yield event.plain_result(
                     "暂时无法获取国服当前赛季物价，请稍后重试。"
                     "数据页：https://poecurrency.top/"
                 )
                 return
+            if isinstance(international_result, Exception):
+                yield event.plain_result(
+                    "暂时无法读取国际服通货顺序，无法按国际服排名整理国服物价，请稍后重试。"
+                    "数据页：https://poe.ninja/poe2/"
+                )
+                return
+            snapshot = sort_national_snapshot(national_result, international_result.rows)
             yield await self._price_result(event, snapshot)
             return
 

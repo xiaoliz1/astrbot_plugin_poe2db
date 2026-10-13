@@ -17,7 +17,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 LEAGUES_URL = "https://poe.ninja/poe2/api/economy/leagues"
 OVERVIEW_URL = "https://poe.ninja/poe2/api/economy/exchange/current/overview"
-USER_AGENT = "AstrBot-PoE2DB/1.5 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.6 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 2_000_000
 LEAGUES_CACHE_SECONDS = 300
 PRICES_CACHE_SECONDS = 1800
@@ -37,6 +37,7 @@ class CurrencyRow:
     sell_value: float | None = None
     sell_change_percent: float | None = None
     unit_label: str | None = None
+    sort_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -76,7 +77,7 @@ def localize_currency_snapshot(
         raise EconomyError("报价基准通货缺少中文名称")
     rows = tuple(
         replace(row, name=chinese_names[currency_key(row.name)][:90])
-        for row in snapshot.rows
+        for row in snapshot.rows[:IMAGE_ROWS]
         if chinese_names.get(currency_key(row.name))
     )
     if not rows:
@@ -232,7 +233,15 @@ def parse_currency_overview(league: str, overview: object) -> CurrencySnapshot:
             if isinstance(raw_trend, list)
             else ()
         )
-        rows.append(CurrencyRow(names[line_id][:90], value, change, trend))
+        rows.append(
+            CurrencyRow(
+                names[line_id][:90],
+                value,
+                change,
+                trend,
+                sort_key=currency_key(names[line_id]),
+            )
+        )
     if not rows:
         raise EconomyError("当前赛季没有可显示的通货价格")
     rows.sort(key=lambda row: (-row.value, row.name))
@@ -240,7 +249,7 @@ def parse_currency_overview(league: str, overview: object) -> CurrencySnapshot:
     return CurrencySnapshot(
         league=league[:100],
         reference=reference[:90],
-        rows=tuple(rows[:IMAGE_ROWS]),
+        rows=tuple(rows),
         total_count=len(rows),
         generated_at=generated_at,
     )
@@ -285,7 +294,8 @@ def render_currency_html(snapshot: CurrencySnapshot) -> str:
     league = _safe_html(snapshot.league)
     reference = _safe_html(snapshot.reference)
     rows: list[str] = []
-    for index, row in enumerate(snapshot.rows, 1):
+    display_rows = snapshot.rows[:IMAGE_ROWS]
+    for index, row in enumerate(display_rows, 1):
         change = row.change_percent
         change_text = "—" if change is None else f"{change:+.1f}%"
         change_class = "flat" if change is None else ("up" if change >= 0 else "down")
@@ -356,9 +366,9 @@ footer{display:flex;justify-content:space-between;gap:16px;color:#9eb2c2;font-si
             f"价格单位：{reference} / 个</div>"
         )
         + (
-            f'<p class="count">显示 {len(snapshot.rows)} / {snapshot.total_count} 种通货</p>'
+            f'<p class="count">共有通货按国际服估价排序 · 国服独有项随后 · 显示 {len(display_rows)} / {snapshot.total_count} 种</p>'
             if is_national
-            else f'<p class="count">按估价排序 · 显示 {len(snapshot.rows)} / {snapshot.total_count} 种通货</p>'
+            else f'<p class="count">按估价排序 · 显示 {len(display_rows)} / {snapshot.total_count} 种通货</p>'
         )
         + (
             '<table><thead><tr><th class="rank">#</th><th class="name">通货</th>'
