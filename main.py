@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.utils.session_waiter import (
     SessionController,
     SessionFilter,
@@ -31,6 +31,7 @@ from .price_notifications import (
     ready_price_requests,
     select_notification_targets,
 )
+from .price_image_store import PriceImageStore
 from .price_schedule import (
     next_hourly_price_refresh_at,
     next_price_refresh_at,
@@ -127,7 +128,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.12.0",
+    "1.12.1",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -141,8 +142,11 @@ class Poe2DBPlugin(Star):
         self.economy = NinjaEconomyClient(timeout)
         self.national_economy = PoECurrencyClient(timeout)
         self._price_snapshots: dict[str, CurrencySnapshot] = {}
-        self._price_images: dict[str, str] = {}
-        self._price_image_updated_at: dict[str, str] = {}
+        self._price_image_store = PriceImageStore(
+            StarTools.get_data_dir("astrbot_plugin_poe2db")
+        )
+        self._price_images = dict(self._price_image_store.images)
+        self._price_image_updated_at = dict(self._price_image_store.updated_at)
         self._national_chinese_names: dict[str, str] = {"divineorb": "神圣石"}
         self._pending_price_requests: set[tuple[str, str]] = set()
         self._known_group_umos: set[str] = set()
@@ -312,9 +316,21 @@ class Poe2DBPlugin(Star):
                 )
                 for market, image_path in zip(updated_markets, render_results):
                     if isinstance(image_path, str) and image_path:
-                        self._price_images[market] = image_path
+                        try:
+                            persisted_path = self._price_image_store.save_replacement(
+                                market,
+                                image_path,
+                                self._price_snapshots[market].generated_at,
+                            )
+                        except Exception as exc:
+                            self._warn_price_refresh(
+                                f"{market}物价图片保存", exc
+                            )
+                            complete = False
+                            continue
+                        self._price_images[market] = persisted_path
                         self._price_image_updated_at[market] = (
-                            self._price_snapshots[market].generated_at
+                            self._price_image_store.updated_at[market]
                         )
                     else:
                         self._warn_price_refresh(f"{market}物价图片生成", image_path)
@@ -433,6 +449,7 @@ class Poe2DBPlugin(Star):
             image_path = await self.html_render(
                 render_currency_html(snapshot),
                 data={},
+                return_url=False,
                 options={"type": "png", "full_page": True},
             )
         except Exception as exc:
