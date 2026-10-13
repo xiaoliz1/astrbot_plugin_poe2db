@@ -22,7 +22,7 @@ from .economy import (
 )
 
 SUMMARY_URL = "https://poecurrency.top/api/summary?version=2"
-USER_AGENT = "AstrBot-PoE2DB/1.12.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.12.2 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 4_000_000
 CACHE_SECONDS = 3600
 CURRENCY_UNITS = {

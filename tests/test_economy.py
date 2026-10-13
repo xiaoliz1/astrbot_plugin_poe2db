@@ -189,18 +189,23 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Divine Orb", markup)
         self.assertIn("7 天趋势", markup)
         self.assertIn(
-            '<img class="item-icon" src="https://poe.ninja/gen/image/mirror.webp" alt="">',
+            '<img class="item-icon" src="https://web.poecdn.com/gen/image/mirror.webp" alt="">',
             markup,
         )
-        self.assertLess(markup.index('src="https://poe.ninja/gen/image/mirror.webp"'), markup.index("&#123;"))
+        self.assertLess(markup.index('src="https://web.poecdn.com/gen/image/mirror.webp"'), markup.index("&#123;"))
 
     def test_item_icon_urls_only_allow_the_price_source_image_hosts(self):
         from astrbot_plugin_poe2db.economy import safe_currency_icon_url
 
         self.assertEqual(
             safe_currency_icon_url("/gen/image/currency.webp"),
-            "https://poe.ninja/gen/image/currency.webp",
+            "https://web.poecdn.com/gen/image/currency.webp",
         )
+        self.assertEqual(
+            safe_currency_icon_url("https://web.poecdn.com/gen/image/currency.webp"),
+            "https://web.poecdn.com/gen/image/currency.webp",
+        )
+        self.assertIsNone(safe_currency_icon_url("https://poe.ninja/gen/image/currency.webp"))
         self.assertEqual(
             safe_currency_icon_url("https://cdn.poe2db.tw/image/currency.webp"),
             "https://cdn.poe2db.tw/image/currency.webp",

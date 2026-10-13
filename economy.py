@@ -17,7 +17,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 LEAGUES_URL = "https://poe.ninja/poe2/api/economy/leagues"
 OVERVIEW_URL = "https://poe.ninja/poe2/api/economy/exchange/current/overview"
-USER_AGENT = "AstrBot-PoE2DB/1.12.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.12.2 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 2_000_000
 LEAGUES_CACHE_SECONDS = 300
 PRICES_CACHE_SECONDS = 1800
@@ -105,13 +105,13 @@ def safe_currency_icon_url(value: object) -> str | None:
     if any(segment in {".", ".."} or "\\" in segment for segment in decoded_segments):
         return None
     if not parts.scheme and not parts.netloc and parts.path.startswith("/gen/image/"):
-        return "https://poe.ninja" + parts.path
+        return "https://web.poecdn.com" + parts.path
     if (
         parts.scheme == "https"
-        and parts.hostname == "poe.ninja"
+        and parts.hostname == "web.poecdn.com"
         and parts.path.startswith("/gen/image/")
     ):
-        return "https://poe.ninja" + parts.path
+        return "https://web.poecdn.com" + parts.path
     if (
         parts.scheme == "https"
         and parts.hostname == "cdn.poe2db.tw"
