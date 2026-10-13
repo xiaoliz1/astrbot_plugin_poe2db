@@ -14,6 +14,7 @@ from astrbot.core.utils.session_waiter import (
     SessionFilter,
     session_waiter,
 )
+from quart import jsonify
 
 from .builds import character_search_page_url
 from .economy import (
@@ -126,7 +127,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.11.0",
+    "1.12.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -141,22 +142,115 @@ class Poe2DBPlugin(Star):
         self.national_economy = PoECurrencyClient(timeout)
         self._price_snapshots: dict[str, CurrencySnapshot] = {}
         self._price_images: dict[str, str] = {}
+        self._price_image_updated_at: dict[str, str] = {}
         self._national_chinese_names: dict[str, str] = {"divineorb": "神圣石"}
         self._pending_price_requests: set[tuple[str, str]] = set()
         self._known_group_umos: set[str] = set()
         self._price_refresh_lock = asyncio.Lock()
+        self._manual_price_refresh_task: asyncio.Task[None] | None = None
+        self._manual_price_refresh_state = "idle"
+        self._manual_price_refresh_message = "后台每小时自动采集；也可以在此手动采集。"
+        self._manual_price_refresh_started_at: str | None = None
+        self._manual_price_refresh_completed_at: str | None = None
+        context.register_web_api(
+            "/astrbot_plugin_poe2db/price/status",
+            self._price_dashboard_status_api,
+            ["GET"],
+            "获取 PoE2 物价采集状态",
+        )
+        context.register_web_api(
+            "/astrbot_plugin_poe2db/price/refresh",
+            self._start_manual_price_refresh_api,
+            ["POST"],
+            "手动采集 PoE2 物价",
+        )
         self._price_refresh_task = asyncio.create_task(self._price_refresh_loop())
 
     async def terminate(self) -> None:
-        """Stop the scheduled market refresh when AstrBot unloads the plugin."""
-        task = self._price_refresh_task
-        if task is None:
-            return
-        task.cancel()
+        """Stop background price tasks when AstrBot unloads the plugin."""
+        tasks = [
+            task
+            for task in (
+                self._price_refresh_task,
+                self._manual_price_refresh_task,
+            )
+            if task is not None and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _price_local_timestamp(self) -> str:
+        offset_hours = normalize_utc_offset_hours(
+            self.config.get("price_timezone_offset"), 8.0
+        )
+        return datetime.now(timezone_for_utc_offset(offset_hours)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+    def _price_dashboard_status(self) -> dict[str, object]:
+        return {
+            "state": self._manual_price_refresh_state,
+            "message": self._manual_price_refresh_message,
+            "started_at": self._manual_price_refresh_started_at,
+            "completed_at": self._manual_price_refresh_completed_at,
+            "tables": {
+                market: {
+                    "ready": bool(self._price_images.get(market)),
+                    "updated_at": self._price_image_updated_at.get(market),
+                }
+                for market in ("international", "national")
+            },
+        }
+
+    async def _price_dashboard_status_api(self):
+        return jsonify(self._price_dashboard_status())
+
+    async def _start_manual_price_refresh_api(self):
+        task = self._manual_price_refresh_task
+        if task is not None and not task.done():
+            return jsonify(self._price_dashboard_status())
+
+        self._manual_price_refresh_state = "running"
+        self._manual_price_refresh_message = "正在采集国际服和国服价格并生成图片……"
+        self._manual_price_refresh_started_at = self._price_local_timestamp()
+        self._manual_price_refresh_completed_at = None
+        self._manual_price_refresh_task = asyncio.create_task(
+            self._run_manual_price_refresh()
+        )
+        return jsonify(self._price_dashboard_status())
+
+    async def _run_manual_price_refresh(self) -> None:
         try:
-            await task
+            complete = await self._refresh_price_tables()
+            try:
+                await self._notify_pending_price_requests()
+            except Exception as exc:
+                self._warn_price_refresh("手动采集后的查询回告", exc)
+
+            if complete:
+                self._manual_price_refresh_state = "success"
+                self._manual_price_refresh_message = (
+                    "两服价格采集和图片生成已完成；物价命令现在会使用新图片。"
+                )
+            else:
+                self._manual_price_refresh_state = "failed"
+                self._manual_price_refresh_message = (
+                    "至少一服采集或图片生成失败，已保留上次成功的图片；请查看插件日志。"
+                )
         except asyncio.CancelledError:
-            pass
+            self._manual_price_refresh_state = "cancelled"
+            self._manual_price_refresh_message = "插件卸载或重载，手动采集已停止。"
+            raise
+        except Exception as exc:
+            self._warn_price_refresh("手动采集", exc)
+            self._manual_price_refresh_state = "failed"
+            self._manual_price_refresh_message = (
+                "物价采集失败，已保留上次成功的图片；请查看插件日志。"
+            )
+        finally:
+            self._manual_price_refresh_completed_at = self._price_local_timestamp()
 
     def _warn_price_refresh(self, source: str, error: object) -> None:
         plugin_logger = getattr(self, "logger", None)
@@ -219,6 +313,9 @@ class Poe2DBPlugin(Star):
                 for market, image_path in zip(updated_markets, render_results):
                     if isinstance(image_path, str) and image_path:
                         self._price_images[market] = image_path
+                        self._price_image_updated_at[market] = (
+                            self._price_snapshots[market].generated_at
+                        )
                     else:
                         self._warn_price_refresh(f"{market}物价图片生成", image_path)
                         complete = False

@@ -1,6 +1,6 @@
 # 流放之路2资料问答（AstrBot 插件）
 
-在 AstrBot 中用 `/poe2 问题` 查询《流放之路2》资料；匹配到带有 Poe2DB 图片的词条时，答案后会附上图片，没有可用图片则照常回复文字。用 `/poe2search 词条名` 直接搜索技能、装备、怪物等词条并返回摘要和链接，有 Poe2DB 图片时也会附图；用 `/poe2bd 游戏角色名` 打开 poe.ninja 当前赛季的角色筛选结果，或用 `/poe2 国际服物价`、`/poe2 国服物价` 获取对应服务器的通货价格图片。资料搜索优先读取 [Poe2DB 简体中文站](https://poe2db.tw/cn/)，需要时回退到[繁体中文站](https://poe2db.tw/tw/)；同时检索 [PoE2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki)。聊天模型只根据实际取得的资料生成简体中文回答，回答末尾附上来源链接。
+在 AstrBot 中用 `/poe2 问题` 查询《流放之路2》资料；匹配到带有 Poe2DB 图片的词条时，答案后会附上图片，没有可用图片则照常回复文字。用 `/poe2search 词条名` 直接搜索技能、装备、怪物等词条并返回摘要和链接，有 Poe2DB 图片时也会附图；用 `/poe2bd 游戏角色名` 打开 poe.ninja 当前赛季的角色筛选结果，或用 `/poe2 国际服物价`、`/poe2 国服物价` 获取对应服务器的通货价格图片。插件详情页的“物价采集”页面提供手动采集按钮。资料搜索优先读取 [Poe2DB 简体中文站](https://poe2db.tw/cn/)，需要时回退到[繁体中文站](https://poe2db.tw/tw/)；同时检索 [PoE2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki)。聊天模型只根据实际取得的资料生成简体中文回答，回答末尾附上来源链接。
 
 ## 安装
 
@@ -11,9 +11,9 @@ cd AstrBot/data/plugins
 git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 ```
 
-插件代码需要 Python 3.10 或更新版本。AstrBot 会按 `requirements.txt` 安装 `beautifulsoup4`；当前会话还需要配置可用的聊天模型。
+插件代码需要 Python 3.10 或更新版本以及 AstrBot 4.24.2 或更新版本。AstrBot 会按 `requirements.txt` 安装 `beautifulsoup4`；当前会话还需要配置可用的聊天模型。
 
-已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.11.0`。
+已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.12.0`。
 
 ## 使用
 
@@ -47,6 +47,8 @@ git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 /poe2 国际服物价
 /poe2 国服物价
 ```
+
+在 AstrBot WebUI 打开“插件”中的本插件详情页，再进入“物价采集”页面，点击“立即采集”即可手动更新两服价格并重新生成图片。页面会显示采集状态和两张图片的生成时间。手动采集不会提前触发群通知；通知仍按配置的每日时段发送。
 
 ### 角色查询
 

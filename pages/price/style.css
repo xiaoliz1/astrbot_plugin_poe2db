@@ -1,0 +1,138 @@
+:root {
+  color-scheme: light;
+  --page-bg: #f6f8fb;
+  --card-bg: #ffffff;
+  --text: #1f2937;
+  --muted: #64748b;
+  --border: #dbe3ed;
+  --accent: #2586c7;
+  --accent-hover: #176fa9;
+  --success: #16834a;
+  --error: #bb3c36;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --page-bg: #151a21;
+  --card-bg: #202833;
+  --text: #e7edf5;
+  --muted: #a6b1bf;
+  --border: #354252;
+  --accent: #49a5e0;
+  --accent-hover: #72b8e8;
+  --success: #69d398;
+  --error: #ff8982;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+  background: var(--page-bg);
+  color: var(--text);
+  font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.panel {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card-bg);
+}
+
+h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.intro,
+.footnote,
+.table-card p {
+  color: var(--muted);
+}
+
+.intro {
+  margin: 8px 0 20px;
+}
+
+button {
+  min-height: 42px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.status {
+  min-height: 26px;
+  margin: 14px 0 18px;
+}
+
+.status[data-state="success"] {
+  color: var(--success);
+}
+
+.status[data-state="failed"] {
+  color: var(--error);
+}
+
+.tables {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.table-card {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.table-card h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.table-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.footnote {
+  margin: 18px 0 0;
+  font-size: 13px;
+}
+
+@media (max-width: 520px) {
+  body {
+    padding: 12px;
+  }
+
+  .panel {
+    padding: 18px;
+  }
+
+  .tables {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>物价采集</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <main class="panel">
+      <h1>流放之路 2 物价采集</h1>
+      <p class="intro">
+        手动刷新国际服和国服价格，并重新生成两张物价图片。采集完成后，聊天中的物价命令会直接使用新图片。
+      </p>
+
+      <button id="refresh" type="button">立即采集</button>
+      <p id="status" class="status" role="status" aria-live="polite">
+        正在读取采集状态……
+      </p>
+
+      <section class="tables" aria-label="最近生成的物价图片">
+        <article class="table-card">
+          <h2>国际服</h2>
+          <p id="international-time">尚无已生成图片</p>
+        </article>
+        <article class="table-card">
+          <h2>国服</h2>
+          <p id="national-time">尚无已生成图片</p>
+        </article>
+      </section>
+      <p class="footnote">
+        自动采集仍按每小时整点运行；此按钮会立即采集一次。手动采集不会提前触发群通知。
+      </p>
+    </main>
+  </body>
+</html>
