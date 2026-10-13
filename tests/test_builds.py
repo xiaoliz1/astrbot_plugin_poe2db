@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from astrbot_plugin_poe2db.builds import (
     character_profile_url_from_results,
     character_search_page_url,
+    format_build_page_text,
+    is_public_character_profile_url,
 )
 
 
@@ -77,7 +79,9 @@ class CharacterSearchUrlTests(unittest.TestCase):
             },
         ]
         self.assertIsNone(
-            character_profile_url_from_results("九球天后莉莉丝", "Forbidden Rites", results)
+            character_profile_url_from_results(
+                "九球天后莉莉丝", "Forbidden Rites", results
+            )
         )
 
     def test_ignores_profile_links_from_other_hosts_or_leagues(self):
@@ -92,9 +96,53 @@ class CharacterSearchUrlTests(unittest.TestCase):
             },
         ]
         self.assertIsNone(
-            character_profile_url_from_results("九球天后莉莉丝", "Forbidden Rites", results)
+            character_profile_url_from_results(
+                "九球天后莉莉丝", "Forbidden Rites", results
+            )
         )
 
+
+class PublicBuildPageTextTests(unittest.TestCase):
+    def test_accepts_only_https_profile_pages_for_the_requested_league(self):
+        profile_url = (
+            "https://poe.ninja/poe2/builds/forbiddenrites/character/"
+            "a136681423-9651/%E4%B9%9D%E7%90%83%E5%A4%A9%E5%90%8E%E8%8E%89%E8%8E%89%E4%B8%9D"
+            "?i=0&search=name%3D%E4%B9%9D%E7%90%83"
+        )
+
+        self.assertTrue(
+            is_public_character_profile_url(profile_url, "Forbidden Rites")
+        )
+        self.assertFalse(
+            is_public_character_profile_url(
+                profile_url.replace("https://poe.ninja", "https://example.com"),
+                "Forbidden Rites",
+            )
+        )
+        self.assertFalse(
+            is_public_character_profile_url(profile_url, "Standard")
+        )
+        self.assertFalse(
+            is_public_character_profile_url(
+                profile_url.replace("/character/", "/character/a/extra/"),
+                "Forbidden Rites",
+            )
+        )
+
+    def test_formats_page_text_and_equipment_tooltips_with_a_hard_size_limit(self):
+        result = format_build_page_text(
+            "  Stats  \n\n  MAIN SKILLS  ",
+            ["Life: 1000\nCold Resistance: 75%", "Life: 1000\nCold Resistance: 75%"],
+        )
+
+        self.assertIn("Stats\nMAIN SKILLS", result)
+        self.assertIn("Life: 1000\nCold Resistance: 75%", result)
+        self.assertEqual(result.count("Life: 1000"), 1)
+
+        truncated = format_build_page_text("page " * 500, ["item " * 500], max_chars=600)
+        self.assertLessEqual(len(truncated), 600)
+        self.assertIn("页面公开信息：", truncated)
+        self.assertIn("装备物品悬停信息：", truncated)
 
 if __name__ == "__main__":
     unittest.main()
