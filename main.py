@@ -10,7 +10,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 from .poe2db import Poe2DBClient, Poe2DBError, Source, parse_multilingual_terms, search_url
-from .sources import ExternalSourcesClient
+from .wiki import WikiClient, WikiSourceError, wiki_names_from_poe2db
 
 
 def _bounded_int(value: object, default: int, minimum: int, maximum: int) -> int:
@@ -30,7 +30,7 @@ def _question_from_message(message: str) -> str:
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.2.0",
+    "1.3.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -40,7 +40,7 @@ class Poe2DBPlugin(Star):
         timeout = _bounded_int(config.get("timeout_seconds"), 15, 5, 30)
         cache_minutes = _bounded_int(config.get("cache_minutes"), 15, 0, 60)
         self.client = Poe2DBClient(timeout, cache_minutes * 60)
-        self.external = ExternalSourcesClient(timeout, cache_minutes * 60)
+        self.wiki = WikiClient(timeout, cache_minutes * 60)
 
     @filter.command("poe2")
     async def poe2(self, event: AstrMessageEvent):
@@ -77,20 +77,25 @@ class Poe2DBPlugin(Star):
         except Exception:
             terms, names = parse_multilingual_terms("", question)
         max_sources = _bounded_int(self.config.get("max_sources"), 5, 1, 8)
-        poe_result, external_result = await asyncio.gather(
+        poe_result, wiki_result = await asyncio.gather(
             self.client.find_sources(terms, max_sources=min(max_sources, 2), max_chars=3500),
-            self.external.find_sources(names),
+            self.wiki.find_wiki(names),
             return_exceptions=True,
         )
         poe_sources = poe_result if isinstance(poe_result, list) else []
-        external_sources, failures = (
-            external_result
-            if isinstance(external_result, tuple)
-            else ({}, ["poe-game-data", "PoE2Wiki", "RePoE"])
-        )
+        wiki_sources = wiki_result if isinstance(wiki_result, list) else []
+        if not wiki_sources and poe_sources:
+            # A matched Poe2DB page may expose the English article name in its
+            # canonical URL even when the name extractor returned only Chinese.
+            wiki_names = wiki_names_from_poe2db(poe_sources)
+            if wiki_names:
+                try:
+                    wiki_sources = await self.wiki.find_wiki(wiki_names)
+                except WikiSourceError:
+                    pass
         buckets: dict[str, list[Source]] = {
             "Poe2DB": poe_sources,
-            **external_sources,
+            "PoE2Wiki": wiki_sources,
         }
         sources: list[Source] = []
         for bucket in buckets.values():
@@ -106,7 +111,7 @@ class Poe2DBPlugin(Star):
                 for term in terms
                 for locale in ("cn", "tw")
             )
-            if isinstance(poe_result, Poe2DBError) and len(failures) == 3:
+            if isinstance(poe_result, Poe2DBError) and isinstance(wiki_result, Exception):
                 yield event.plain_result("资料站点暂时无法读取，请稍后重试。")
                 return
             yield event.plain_result(
