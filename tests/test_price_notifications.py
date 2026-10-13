@@ -9,11 +9,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from astrbot_plugin_poe2db.price_notifications import (
     group_umo_parts,
     parse_notification_targets,
+    ready_price_requests,
     select_notification_targets,
 )
 
 
 class PriceNotificationTargetTests(unittest.TestCase):
+    def test_pending_price_requests_become_ready_per_market(self):
+        pending = {
+            ("qqbot:GroupMessage:100", "international"),
+            ("qqbot:GroupMessage:100", "national"),
+            ("qqbot:FriendMessage:200", "international"),
+        }
+        self.assertEqual(
+            ready_price_requests(pending, {"international"}),
+            [
+                ("qqbot:FriendMessage:200", "international"),
+                ("qqbot:GroupMessage:100", "international"),
+            ],
+        )
+
     def test_targets_accept_newlines_commas_and_deduplicate(self):
         self.assertEqual(
             parse_notification_targets("123, 456\n123"),

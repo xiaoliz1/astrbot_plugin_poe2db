@@ -15,6 +15,17 @@ def parse_notification_targets(value: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for item in values if item))
 
 
+def ready_price_requests(
+    pending_requests: set[tuple[str, str]], available_markets: set[str]
+) -> list[tuple[str, str]]:
+    """Return queued UMO/market requests whose price snapshots are available."""
+    return sorted(
+        (umo, market)
+        for umo, market in pending_requests
+        if market in available_markets
+    )
+
+
 def group_umo_parts(umo: str) -> tuple[str, str, str] | None:
     """Return (platform_id, message_type, group_id) for a group UMO."""
     parts = umo.split(":", 2)
