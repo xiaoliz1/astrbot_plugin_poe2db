@@ -6,8 +6,13 @@ import asyncio
 import re
 
 from astrbot.api import AstrBotConfig
-from astrbot.api.event import AstrMessageEvent, SessionFilter, filter
+from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
+from astrbot.core.utils.session_waiter import (
+    SessionController,
+    SessionFilter,
+    session_waiter,
+)
 
 from .builds import character_search_page_url
 from .economy import (
@@ -108,7 +113,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.7.4",
+    "1.7.5",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -299,48 +304,53 @@ class Poe2DBPlugin(Star):
         choice_origin = event.unified_msg_origin
         choice_sender = str(event.get_sender_id())
 
-        @event.session_waiter(
-            timeout=60,
-            session_filter=_SenderSessionFilter(),
-        )
-        async def wait_for_choice(event2: AstrMessageEvent, controller):
+        @session_waiter(timeout=60)
+        async def wait_for_choice(
+            controller: SessionController, event2: AstrMessageEvent
+        ):
             nonlocal choice_position
             if (
                 event2.unified_msg_origin != choice_origin
                 or str(event2.get_sender_id()) != choice_sender
             ):
-                controller.keep()
+                controller.keep(timeout=60, reset_timeout=True)
                 return
 
             answer = event2.message_str.strip()
             if answer.casefold() in {"0", "取消", "取消选择", "cancel", "退出"}:
                 controller.stop()
-                yield event2.plain_result("已取消词条选择。")
+                await event2.send(event2.plain_result("已取消词条选择。"))
                 return
 
             group_index, query, candidates = ambiguities[choice_position]
             if not re.fullmatch(r"\d{1,2}", answer):
-                yield event2.plain_result(
-                    f"请回复 1 到 {len(candidates)} 的编号，或回复“取消”。"
+                await event2.send(
+                    event2.plain_result(
+                        f"请回复 1 到 {len(candidates)} 的编号，或回复“取消”。"
+                    )
                 )
-                controller.keep()
+                controller.keep(timeout=60, reset_timeout=True)
                 return
             selected_index = int(answer)
             if not 1 <= selected_index <= len(candidates):
-                yield event2.plain_result(
-                    f"编号无效，请回复 1 到 {len(candidates)}，或回复“取消”。"
+                await event2.send(
+                    event2.plain_result(
+                        f"编号无效，请回复 1 到 {len(candidates)}，或回复“取消”。"
+                    )
                 )
-                controller.keep()
+                controller.keep(timeout=60, reset_timeout=True)
                 return
 
             grouped[group_index] = (query, [candidates[selected_index - 1]])
             choice_position += 1
             if choice_position < len(ambiguities):
                 _, next_query, next_candidates = ambiguities[choice_position]
-                yield event2.plain_result(
-                    format_disambiguation_prompt(next_query, next_candidates)
+                await event2.send(
+                    event2.plain_result(
+                        format_disambiguation_prompt(next_query, next_candidates)
+                    )
                 )
-                controller.keep()
+                controller.keep(timeout=60, reset_timeout=True)
                 return
 
             controller.stop()
@@ -359,11 +369,15 @@ class Poe2DBPlugin(Star):
                 None,
                 selected_candidate=True,
             ):
-                yield result
+                await event2.send(result)
 
         yield event.plain_result(
             format_disambiguation_prompt(ambiguities[0][1], ambiguities[0][2])
         )
+        try:
+            await wait_for_choice(event, session_filter=_SenderSessionFilter())
+        except TimeoutError:
+            yield event.plain_result("词条选择已超时，请重新发送问题。")
 
     @filter.command("poe2")
     async def poe2(self, event: AstrMessageEvent):
