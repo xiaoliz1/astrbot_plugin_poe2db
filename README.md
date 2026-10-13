@@ -13,7 +13,7 @@ git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 
 插件代码需要 Python 3.10 或更新版本以及 AstrBot 4.24.2 或更新版本。AstrBot 会按 `requirements.txt` 安装 `beautifulsoup4`；当前会话还需要配置可用的聊天模型。
 
-已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.12.2`。
+已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.12.3`。
 
 ## 使用
 
@@ -60,13 +60,13 @@ git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 
 `/poe2search 词条名` 不调用聊天模型，直接搜索 Poe2DB 和 PoE2Wiki，按词条标题与搜索词的相似度排列结果，并显示简短摘要和原始页面链接；中文搜索命中 Poe2DB 后，会尝试用页面中的英文名称补查 Wiki。有 Poe2DB 图片时会额外发送图片；没有图片时仍以文字和链接回复。图片只接受 Poe2DB 图片 CDN 的 HTTPS 图片地址。没有直接命中时会返回两站的搜索页链接。技能、辅助宝石、装备、词缀、职业、怪物和地图等类别取决于资料站实际收录内容。
 
-`/poe2bd 游戏角色名` 会生成 poe.ninja 当前赛季的公开 Builds 筛选链接，筛选链接同时包含页面搜索状态和角色名条件。赛季名称从 poe.ninja 公开的赛季列表读取。详情页路径还需要 poe.ninja 分配的账号标识；命令无法从角色名可靠推导该标识时，会返回筛选页链接供你点击对应角色。
+`/poe2bd 游戏角色名` 返回 poe.ninja 当前赛季的公开 Builds 筛选链接，链接包含角色名条件；打开后可点击匹配角色进入详情页。赛季名称从 poe.ninja 公开的赛季列表读取。角色详情链接还需要 poe.ninja 分配的账号标识。poe.ninja 明确说明 Builds/Profile 查询接口属于内部接口，不供第三方使用；插件不调用该接口，也不会绕过玩家的隐藏角色设置，因此无法仅凭角色名稳定生成 `/character/...` 详情链接。
 
 | 来源 | 可用内容 | 说明 |
 | --- | --- | --- |
 | [Poe2DB 简体](https://poe2db.tw/cn/)／[繁体](https://poe2db.tw/tw/) | 中文词条、游戏数值和说明 | 简体优先；匹配不到或暂时无法读取时尝试繁体。 |
 | [PoE2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki) | 英文词条 | 通过公开 MediaWiki 搜索接口找词条，再读取词条正文；站点要求浏览器验证时跳过。 |
-| [poe.ninja PoE2 Builds](https://poe.ninja/poe2/builds) | 角色搜索链接 | 按输入的角色名生成当前赛季筛选页面；不调用 Builds/角色内部 API。 |
+| [poe.ninja PoE2 Builds](https://poe.ninja/poe2/builds) | 角色搜索链接 | 按输入的角色名生成当前赛季筛选页面；不调用 [Builds/Profile 内部接口](https://poe.ninja/docs/api)。 |
 
 普通问答默认最多引用 5 条资料，分别来自 Poe2DB 和 PoE2Wiki 实际命中的页面；`/poe2search` 也最多显示同样数量的词条。可在 AstrBot 插件配置调整资料条数（1–8）、单次站点请求超时（5–30 秒）和内存缓存时间（0–60 分钟）；若设为 1，每次只显示一条来源。某个来源失败时，另一个来源仍可提供答案。回答会说明资料不足或来源冲突；游戏数值可能随版本改变，应以附上的页面为准。
 

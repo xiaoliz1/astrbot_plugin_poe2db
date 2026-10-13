@@ -21,7 +21,7 @@ WIKI_API_URLS = (
     "https://www.poe2wiki.net/api.php",
 )
 WIKI_PAGE_BASE = "https://www.poe2wiki.net/wiki/"
-USER_AGENT = "AstrBot-PoE2DB/1.12.2 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.12.3 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 2_500_000
 MAX_HTML_BYTES = 3_000_000
 

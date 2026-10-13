@@ -7,7 +7,12 @@ from urllib.parse import urlencode
 
 
 def character_search_page_url(character_name: str, league_name: str) -> str:
-    """Build a public Builds-page link filtered by the supplied character name."""
+    """Build a public Builds-page search link filtered by character name.
+
+    poe.ninja's character-profile lookup is part of its internal Builds/Profile
+    API, which is not available for third-party use. The public search page is
+    the supported fallback and lets the user open a matching character.
+    """
     query = character_name.strip()
     league_slug = re.sub(r"[^a-z0-9]", "", league_name.casefold())
     if not query or len(query) > 100:
