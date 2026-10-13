@@ -16,5 +16,40 @@
     "description": "站点页面缓存时间（分钟）",
     "hint": "范围 0–60 分钟；0 表示不缓存。",
     "default": 15
+  },
+  "price_notification_enabled": {
+    "type": "bool",
+    "description": "启用物价自动通知",
+    "hint": "开启后，在配置的物价更新时段成功刷新两服数据时，向匹配的群发送国际服和国服物价图片。插件启动时的首次采集不会推送。",
+    "default": false
+  },
+  "price_notification_mode": {
+    "type": "string",
+    "description": "群通知名单模式",
+    "hint": "白名单只发送给名单中的群；黑名单发送给插件已识别的群，但跳过名单中的群。默认白名单。",
+    "options": [
+      {"label": "白名单", "value": "whitelist"},
+      {"label": "黑名单", "value": "blacklist"}
+    ],
+    "default": "whitelist"
+  },
+  "price_notification_targets": {
+    "type": "text",
+    "description": "群号 / 群会话列表",
+    "hint": "每行填写一个群号或完整群会话标识（UMO），例如 123456789 或 aiocqhttp:GroupMessage:123456789。留空白名单时不会发送；黑名单模式留空会向插件已识别的群发送。多个平台时请填写完整 UMO 以指定平台。",
+    "default": ""
+  },
+  "price_refresh_times": {
+    "type": "text",
+    "description": "每日物价更新时段",
+    "hint": "填写一个或多个 24 小时制时刻，用逗号或换行分隔；默认 00:00、06:00、12:00、18:00。24:00 会按次日 00:00 处理。修改时段后请重载插件。",
+    "default": "00:00,06:00,12:00,18:00"
+  },
+  "price_timezone_offset": {
+    "type": "float",
+    "description": "物价通知时区 UTC 偏移小时数",
+    "hint": "范围 -12 到 14，支持半小时等小数偏移；中国标准时间为 8。更新时段按此时区计算；修改后请重载插件。",
+    "default": 8,
+    "slider": {"min": -12, "max": 14, "step": 0.5}
   }
 }

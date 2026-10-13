@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timedelta
 
 from astrbot.api import AstrBotConfig
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.session_waiter import (
     SessionController,
@@ -25,7 +25,16 @@ from .economy import (
 )
 from .poe2db import Poe2DBClient, Poe2DBError, Source, parse_multilingual_terms, search_url
 from .poecurrency import PoECurrencyClient, sort_national_snapshot
-from .price_schedule import BEIJING_TIMEZONE, next_price_refresh_at
+from .price_notifications import (
+    group_umo_parts,
+    select_notification_targets,
+)
+from .price_schedule import (
+    next_price_refresh_at,
+    normalize_utc_offset_hours,
+    parse_daily_refresh_times,
+    timezone_for_utc_offset,
+)
 from .poe2search import (
     find_ambiguous_groups,
     format_disambiguation_prompt,
@@ -115,7 +124,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.8.0",
+    "1.9.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -129,6 +138,7 @@ class Poe2DBPlugin(Star):
         self.economy = NinjaEconomyClient(timeout)
         self.national_economy = PoECurrencyClient(timeout)
         self._price_snapshots: dict[str, CurrencySnapshot] = {}
+        self._known_group_umos: set[str] = set()
         self._price_refresh_lock = asyncio.Lock()
         self._price_refresh_task = asyncio.create_task(self._price_refresh_loop())
 
@@ -193,27 +203,149 @@ class Poe2DBPlugin(Star):
         return complete
 
     async def _price_refresh_loop(self) -> None:
+        complete = False
+        try:
+            complete = await self._refresh_price_tables()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._warn_price_refresh("物价", exc)
+
+        notify_after_success = False
         while True:
-            complete = False
+            offset_hours = normalize_utc_offset_hours(
+                self.config.get("price_timezone_offset"), 8.0
+            )
+            refresh_times = parse_daily_refresh_times(
+                self.config.get("price_refresh_times")
+            )
+            schedule_timezone = timezone_for_utc_offset(offset_hours)
+            now = datetime.now(schedule_timezone)
+            next_refresh = next_price_refresh_at(
+                now, refresh_times, offset_hours
+            )
+            run_at = next_refresh
+            is_scheduled_refresh = True
+            if not complete:
+                retry_at = now + timedelta(minutes=15)
+                if retry_at < next_refresh:
+                    run_at = retry_at
+                    is_scheduled_refresh = False
+            delay_seconds = max(
+                1.0, (run_at - datetime.now(schedule_timezone)).total_seconds()
+            )
+            await asyncio.sleep(delay_seconds)
+
+            if is_scheduled_refresh:
+                notify_after_success = True
             try:
                 complete = await self._refresh_price_tables()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self._warn_price_refresh("物价", exc)
+                complete = False
 
-            now = datetime.now(BEIJING_TIMEZONE)
-            next_refresh = next_price_refresh_at(now)
-            if not complete:
-                retry_at = now + timedelta(minutes=15)
-                next_refresh = min(next_refresh, retry_at)
-            delay_seconds = max(
-                1.0, (next_refresh - datetime.now(BEIJING_TIMEZONE)).total_seconds()
+            if complete and notify_after_success:
+                try:
+                    await self._send_scheduled_price_notifications()
+                except Exception as exc:
+                    self._warn_price_refresh("物价通知", exc)
+                notify_after_success = False
+
+    def _remember_group_session(self, event: AstrMessageEvent) -> None:
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if group_umo_parts(umo):
+            self._known_group_umos.add(umo)
+
+    def _price_notification_enabled(self) -> bool:
+        value = self.config.get("price_notification_enabled", False)
+        if isinstance(value, str):
+            return value.strip().casefold() in {"1", "true", "yes", "on", "是"}
+        return bool(value)
+
+    def _proactive_platform_ids(self) -> list[str]:
+        manager = getattr(self.context, "platform_manager", None)
+        platforms = getattr(manager, "platform_insts", []) if manager else []
+        platform_ids: list[str] = []
+        for platform in platforms:
+            try:
+                metadata = platform.meta()
+            except Exception:
+                continue
+            if not getattr(metadata, "support_proactive_message", True):
+                continue
+            platform_id = str(getattr(metadata, "id", "") or "").strip()
+            if platform_id and platform_id not in platform_ids:
+                platform_ids.append(platform_id)
+        return platform_ids
+
+    def _price_notification_destinations(self) -> list[str]:
+        mode = self.config.get("price_notification_mode", "whitelist")
+        targets = self.config.get("price_notification_targets", "")
+        return select_notification_targets(
+            mode,
+            targets,
+            self._known_group_umos,
+            self._proactive_platform_ids(),
+        )
+
+    async def _render_price_image(self, snapshot: CurrencySnapshot) -> str | None:
+        try:
+            image_path = await self.html_render(
+                render_currency_html(snapshot),
+                data={},
+                options={"type": "png", "full_page": True},
             )
-            await asyncio.sleep(delay_seconds)
+        except Exception as exc:
+            self._warn_price_refresh("物价图片生成", exc)
+            return None
+        return str(image_path) if image_path else None
+
+    async def _send_scheduled_price_notifications(self) -> None:
+        if not self._price_notification_enabled():
+            return
+        destinations = self._price_notification_destinations()
+        if not destinations:
+            self._warn_price_refresh(
+                "物价通知", "没有可发送的群会话，请检查通知名单和平台配置"
+            )
+            return
+
+        international = self._price_snapshots.get("international")
+        national = self._price_snapshots.get("national")
+        if international is None or national is None:
+            self._warn_price_refresh("物价通知", "两服价格表未同时准备完成")
+            return
+
+        international_image = await self._render_price_image(international)
+        national_image = await self._render_price_image(national)
+        if not international_image or not national_image:
+            self._warn_price_refresh("物价通知", "价格图片生成失败，未发送本次通知")
+            return
+
+        for destination in destinations:
+            try:
+                message = (
+                    MessageChain()
+                    .message("《流放之路2》物价表已更新\n国际服：")
+                    .file_image(international_image)
+                    .message("\n国服：")
+                    .file_image(national_image)
+                )
+                sent = await self.context.send_message(destination, message)
+                if not sent:
+                    self._warn_price_refresh(
+                        "物价通知", f"未找到可发送到会话的平台：{destination}"
+                    )
+            except Exception as exc:
+                self._warn_price_refresh(
+                    "物价通知", f"发送到 {destination} 失败：{exc}"
+                )
 
     @filter.command("poe2bd")
     async def poe2bd(self, event: AstrMessageEvent):
+        self._remember_group_session(event)
         character_name = _character_name_from_message(event.message_str)
         if not character_name:
             yield event.plain_result("用法：/poe2bd 游戏角色名")
@@ -232,6 +364,7 @@ class Poe2DBPlugin(Star):
 
     @filter.command("poe2search")
     async def poe2search(self, event: AstrMessageEvent):
+        self._remember_group_session(event)
         query = _search_query_from_message(event.message_str)
         if not query:
             yield event.plain_result("用法：/poe2search 词条名称，例如 /poe2search 魔血")
@@ -274,14 +407,7 @@ class Poe2DBPlugin(Star):
     async def _price_result(
         self, event: AstrMessageEvent, snapshot: CurrencySnapshot
     ):
-        try:
-            image_path = await self.html_render(
-                render_currency_html(snapshot),
-                data={},
-                options={"type": "png", "full_page": True},
-            )
-        except Exception:
-            return event.plain_result("物价已获取，但图片生成失败。请检查 AstrBot 的 HTML 渲染服务。")
+        image_path = await self._render_price_image(snapshot)
         if not image_path:
             return event.plain_result("物价已获取，但图片生成失败。请检查 AstrBot 的 HTML 渲染服务。")
         return event.image_result(image_path)
@@ -466,6 +592,7 @@ class Poe2DBPlugin(Star):
 
     @filter.command("poe2")
     async def poe2(self, event: AstrMessageEvent):
+        self._remember_group_session(event)
         question = _question_from_message(event.message_str)
         if not question:
             yield event.plain_result(

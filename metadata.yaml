@@ -1,8 +1,8 @@
 name: astrbot_plugin_poe2db
 display_name: 流放之路2资料问答
-short_desc: 搜索流放之路2词条并回答问题，支持歧义确认、词条配图和定时更新物价表。
-desc: /poe2search 直接搜索词条并返回摘要、链接及 Poe2DB 可用图片；/poe2 根据检索资料回答问题，多个相近词条时先让提问者选择，并在匹配到 Poe2DB 图片时附图；/poe2bd 返回 poe.ninja 当前赛季的角色筛选页链接；物价命令展示 14 类经济物品的神圣石价格图片，每天更新四次。
-version: v1.8.0
+short_desc: 搜索流放之路2词条并回答问题，支持歧义确认、词条配图和物价定时推送。
+desc: /poe2search 直接搜索词条并返回摘要、链接及 Poe2DB 可用图片；/poe2 根据检索资料回答问题，多个相近词条时先让提问者选择，并在匹配到 Poe2DB 图片时附图；/poe2bd 返回 poe.ninja 当前赛季的角色筛选页链接；物价命令展示 14 类经济物品的神圣石价格图片，可按时段自动通知指定群。
+version: v1.9.0
 author: xiaoliz1
 repo: https://github.com/xiaoliz1/astrbot_plugin_poe2db
 astrbot_version: ">=4.5.7,<5"
