@@ -17,12 +17,24 @@ git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 
 ## 使用
 
-```bash
+### 联网搜索
+
+```text
 /poe2 碎骨有什么效果？
 /poe2 Mageblood 的词缀是什么？
 /poe2 元素专注辅助宝石有什么作用？
+```
+
+### 物价查询
+
+```text
 /poe2 国际服物价
 /poe2 国服物价
+```
+
+### 角色查询
+
+```text
 /poe2bd 角色名
 ```
 
