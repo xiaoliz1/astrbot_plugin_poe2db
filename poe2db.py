@@ -21,7 +21,7 @@ BASE_URLS = {
 }
 PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.7.2 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.7.3 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 CURRENCY_PAGE = BASE_URLS["cn"] + "Currency_Exchange"
 LEAGUE_CN_PAGE = BASE_URLS["cn"] + "League"
 LEAGUE_US_PAGE = "https://poe2db.tw/us/League"
@@ -36,6 +36,7 @@ class Source:
     title: str
     url: str
     text: str
+    image_url: str | None = None
 
 
 def search_url(term: str, locale: str = "cn") -> str:
@@ -279,6 +280,60 @@ class Poe2DBClient:
         return fallback
 
     @staticmethod
+    def _allowed_image_url(url: str) -> bool:
+        try:
+            parts = urlsplit(url)
+            port = parts.port
+        except ValueError:
+            return False
+        return (
+            parts.scheme == "https"
+            and parts.hostname == "cdn.poe2db.tw"
+            and port is None
+            and parts.username is None
+            and parts.password is None
+            and parts.path.startswith("/image/")
+            and parts.path.lower().endswith((".webp", ".png", ".jpg", ".jpeg", ".gif"))
+            and not parts.query
+            and not parts.fragment
+        )
+
+    @classmethod
+    def _image_from_page(cls, soup: BeautifulSoup, page_url: str) -> str | None:
+        root = soup.select_one(".page-content") or soup
+        candidates: list[tuple[int, str]] = []
+
+        for anchor in root.find_all("a", href=True):
+            candidate = urljoin(page_url, str(anchor.get("href", "")))
+            if cls._allowed_image_url(candidate):
+                label = anchor.get_text(" ", strip=True).casefold()
+                priority = 1 if label in {"image", "图片", "圖片", "图标", "圖標"} else 2
+                candidates.append((priority, candidate))
+
+        for image in root.find_all("img"):
+            for attribute in ("src", "data-src", "data-original", "srcset"):
+                value = image.get(attribute)
+                if not isinstance(value, str):
+                    continue
+                candidates_in_attribute = value.split(",") if attribute == "srcset" else [value]
+                for item in candidates_in_attribute:
+                    candidate_value = item.strip().split()[0] if item.strip() else ""
+                    candidate = urljoin(page_url, candidate_value)
+                    if cls._allowed_image_url(candidate):
+                        candidates.append((3, candidate))
+
+        metadata_image = soup.find("meta", attrs={"property": "og:image", "content": True})
+        if metadata_image:
+            candidate = urljoin(page_url, str(metadata_image.get("content", "")))
+            if cls._allowed_image_url(candidate):
+                # Prefer the page's declared preview image; page-content may
+                # begin with unrelated atlas and minimap artwork.
+                candidates.append((0, candidate))
+
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1] if candidates else None
+
+    @staticmethod
     def _extract_text(soup: BeautifulSoup, max_chars: int) -> str:
         root = soup.select_one(".page-content .tab-content .tab-pane")
         if root is None:
@@ -315,10 +370,11 @@ class Poe2DBClient:
             return None
         # Text extraction rewrites table rows and can remove the self-link.
         canonical = cls._canonical_url(soup, title, url)
+        image_url = cls._image_from_page(soup, url)
         text = cls._extract_text(soup, max_chars)
         if not text:
             return None
-        return Source(title, canonical, text)
+        return Source(title, canonical, text, image_url)
 
     async def _search_term(self, term: str, locale: str, max_chars: int) -> list[Source]:
         url = search_url(term, locale)

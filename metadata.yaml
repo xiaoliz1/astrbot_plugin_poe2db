@@ -1,8 +1,8 @@
 name: astrbot_plugin_poe2db
 display_name: 流放之路2资料问答
-short_desc: 搜索流放之路2词条、回答游戏问题，并查询角色和通货物价。
-desc: /poe2search 从 Poe2DB 和 PoE2Wiki 直接搜索词条并返回摘要与链接；/poe2 根据检索资料回答问题；/poe2bd 返回 poe.ninja 当前赛季的角色筛选页链接；物价命令以图片回复。
-version: v1.7.2
+short_desc: 搜索流放之路2词条并回答问题，支持 Poe2DB 词条配图和物价图片。
+desc: /poe2search 直接搜索词条并返回摘要、链接及 Poe2DB 可用图片；/poe2 根据检索资料回答问题，并在匹配到 Poe2DB 图片时附图；/poe2bd 返回 poe.ninja 当前赛季的角色筛选页链接；物价命令以图片回复。
+version: v1.7.3
 author: xiaoliz1
 repo: https://github.com/xiaoliz1/astrbot_plugin_poe2db
 astrbot_version: ">=4.5.7,<5"

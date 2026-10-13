@@ -48,11 +48,22 @@ def _search_query_from_message(message: str) -> str:
     return text[match.end() :].strip() if match else text
 
 
+def _first_source_image(sources: list[Source]) -> str | None:
+    return next(
+        (
+            source.image_url
+            for source in sources
+            if source.image_url and Poe2DBClient._allowed_image_url(source.image_url)
+        ),
+        None,
+    )
+
+
 @register(
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.7.2",
+    "1.7.3",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -121,6 +132,9 @@ class Poe2DBPlugin(Star):
             yield event.plain_result("Poe2DB 和 PoE2Wiki 暂时无法读取，请稍后重试。")
             return
         yield event.plain_result(format_search_results(query, sources, max_sources))
+        image_url = _first_source_image(poe_sources)
+        if image_url:
+            yield event.image_result(image_url)
 
     async def _price_result(
         self, event: AstrMessageEvent, snapshot: CurrencySnapshot
@@ -294,3 +308,6 @@ class Poe2DBPlugin(Star):
             for index, source in enumerate(sources, 1)
         )
         yield event.plain_result(f"{answer}\n\n资料来源：\n{links}")
+        image_url = _first_source_image(poe_sources)
+        if image_url:
+            yield event.image_result(image_url)

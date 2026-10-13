@@ -72,6 +72,58 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
         sources = await client.find_sources(["冰霜新星"])
         self.assertEqual(sources[0].url, "https://poe2db.tw/cn/Ice_Nova")
 
+    async def test_detail_page_exposes_its_poe2db_cdn_image(self):
+        query_url = search_url("魔血")
+        html = detail_html("魔血", "腰带资料。", "/cn/Mageblood").replace(
+            "<p>腰带资料。</p>",
+            '<a href="//cdn.poe2db.tw/image/Art/2DItems/Belts/Uniques/Mageblood.webp">Image</a>'
+            "<p>腰带资料。</p>",
+        )
+        client = FixtureClient({query_url: html})
+
+        sources = await client.find_sources(["魔血"])
+
+        self.assertEqual(
+            sources[0].image_url,
+            "https://cdn.poe2db.tw/image/Art/2DItems/Belts/Uniques/Mageblood.webp",
+        )
+
+    async def test_article_image_metadata_beats_unrelated_page_artwork(self):
+        query_url = search_url("魔血")
+        html = detail_html("魔血", "腰带资料。", "/cn/Mageblood").replace(
+            "<head>",
+            '<head><meta property="og:image" '
+            'content="https://cdn.poe2db.tw/image/Art/2DItems/Belts/Uniques/Mageblood.webp">',
+        ).replace(
+            '<div class="page-content">',
+            '<div class="page-content"><img src="https://cdn.poe2db.tw/image/Art/2DArt/minimap/player/Expedition2RemnantActive.webp">',
+        )
+        client = FixtureClient({query_url: html})
+
+        sources = await client.find_sources(["魔血"])
+
+        self.assertEqual(
+            sources[0].image_url,
+            "https://cdn.poe2db.tw/image/Art/2DItems/Belts/Uniques/Mageblood.webp",
+        )
+
+    def test_only_direct_https_poe2db_image_urls_are_allowed(self):
+        self.assertTrue(
+            Poe2DBClient._allowed_image_url(
+                "https://cdn.poe2db.tw/image/Art/2DItems/Belts/Uniques/Mageblood.webp"
+            )
+        )
+        for url in (
+            "http://cdn.poe2db.tw/image/Mageblood.webp",
+            "https://example.com/image/Mageblood.webp",
+            "https://cdn.poe2db.tw/redirect/Mageblood.webp",
+            "https://cdn.poe2db.tw:8443/image/Mageblood.webp",
+            "https://cdn.poe2db.tw/image/Mageblood.webp?next=https://example.com",
+            "https://cdn.poe2db.tw/image/Mageblood.svg",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(Poe2DBClient._allowed_image_url(url))
+
     async def test_list_search_fetches_only_site_result(self):
         query_url = search_url("元素")
         pages = {
