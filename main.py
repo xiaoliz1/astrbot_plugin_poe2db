@@ -16,7 +16,7 @@ from astrbot.core.utils.session_waiter import (
 )
 from quart import jsonify
 
-from .builds import character_search_page_url
+from .builds import PoeNinjaBuildsResolver, character_search_page_url
 from .economy import (
     CurrencySnapshot,
     EconomyError,
@@ -128,7 +128,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.12.3",
+    "1.13.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -141,6 +141,7 @@ class Poe2DBPlugin(Star):
         self.wiki = WikiClient(timeout, cache_minutes * 60)
         self.economy = NinjaEconomyClient(timeout)
         self.national_economy = PoECurrencyClient(timeout)
+        self.builds_resolver = PoeNinjaBuildsResolver(timeout)
         self._price_snapshots: dict[str, CurrencySnapshot] = {}
         self._price_image_store = PriceImageStore(
             StarTools.get_data_dir("astrbot_plugin_poe2db")
@@ -184,6 +185,7 @@ class Poe2DBPlugin(Star):
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        await self.builds_resolver.close()
 
     def _price_local_timestamp(self) -> str:
         offset_hours = normalize_utc_offset_hours(
@@ -532,11 +534,14 @@ class Poe2DBPlugin(Star):
             yield event.plain_result("暂时无法确认 poe.ninja 当前赛季，无法生成角色搜索链接，请稍后重试。")
             return
         try:
-            url = character_search_page_url(character_name, league_name)
+            search_url = character_search_page_url(character_name, league_name)
         except ValueError as exc:
             yield event.plain_result(str(exc))
             return
-        yield event.plain_result(url)
+        profile_url = await self.builds_resolver.resolve_character_url(
+            character_name, league_name
+        )
+        yield event.plain_result(profile_url or search_url)
 
     @filter.command("poe2search")
     async def poe2search(self, event: AstrMessageEvent):

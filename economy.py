@@ -17,7 +17,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 LEAGUES_URL = "https://poe.ninja/poe2/api/economy/leagues"
 OVERVIEW_URL = "https://poe.ninja/poe2/api/economy/exchange/current/overview"
-USER_AGENT = "AstrBot-PoE2DB/1.12.3 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.13.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 2_000_000
 LEAGUES_CACHE_SECONDS = 300
 PRICES_CACHE_SECONDS = 1800
