@@ -25,8 +25,13 @@ def overview():
     return {
         "core": {"primary": "divine", "items": [{"id": "divine", "name": "Divine Orb"}]},
         "items": [
-            {"id": "mirror", "name": "Mirror of Kalandra"},
-            {"id": "chaos", "name": "Chaos Orb"},
+            {
+                "id": "mirror",
+                "name": "Mirror of Kalandra",
+                "detailsId": "mirror-of-kalandra",
+                "image": "/gen/image/mirror.webp",
+            },
+            {"id": "chaos", "name": "Chaos Orb", "image": "/gen/image/chaos.webp"},
             {"id": "invalid", "name": "Invalid"},
         ],
         "lines": [
@@ -183,6 +188,39 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("<img src=x", markup)
         self.assertIn("Divine Orb", markup)
         self.assertIn("7 天趋势", markup)
+        self.assertIn(
+            '<img class="item-icon" src="https://poe.ninja/gen/image/mirror.webp" alt="">',
+            markup,
+        )
+        self.assertLess(markup.index('src="https://poe.ninja/gen/image/mirror.webp"'), markup.index("&#123;"))
+
+    def test_item_icon_urls_only_allow_the_price_source_image_hosts(self):
+        from astrbot_plugin_poe2db.economy import safe_currency_icon_url
+
+        self.assertEqual(
+            safe_currency_icon_url("/gen/image/currency.webp"),
+            "https://poe.ninja/gen/image/currency.webp",
+        )
+        self.assertEqual(
+            safe_currency_icon_url("https://cdn.poe2db.tw/image/currency.webp"),
+            "https://cdn.poe2db.tw/image/currency.webp",
+        )
+        self.assertIsNone(safe_currency_icon_url("https://evil.example/image.webp"))
+        self.assertIsNone(safe_currency_icon_url("/gen/image/../../x"))
+        self.assertIsNone(safe_currency_icon_url("//evil.example/gen/image/a.webp"))
+
+    def test_renderer_omits_untrusted_item_icon_url(self):
+        row = CurrencyRow(
+            name="测试物品",
+            value=1.0,
+            change_percent=None,
+            trend=(),
+            icon_url='https://evil.example/a.webp" onerror="alert(1)',
+        )
+        snapshot = CurrencySnapshot("测试赛季", "神圣石", (row,), 1, "2026-10-13 12:00")
+        markup = render_currency_html(snapshot)
+        self.assertNotIn("evil.example", markup)
+        self.assertIn("测试物品", markup)
 
     def test_currency_image_uses_chinese_names_and_units(self):
         snapshot = parse_currency_overview("Forbidden Rites", overview())
@@ -197,7 +235,7 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         for term in ("Mirror of Kalandra", "Chaos Orb", "Divine Orb", "Forbidden Rites", "5.00k"):
             self.assertNotIn(term, markup)
 
-    def test_localizes_live_economy_names_and_categories(self):
+    def test_localizes_live_currency_names_and_categories(self):
         payload = overview()
         payload["items"][0]["detailsId"] = "mirror-of-kalandra"
         snapshot = parse_currency_overview("Forbidden Rites", payload)

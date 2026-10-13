@@ -13,7 +13,7 @@ git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 
 插件代码需要 Python 3.10 或更新版本。AstrBot 会按 `requirements.txt` 安装 `beautifulsoup4`；当前会话还需要配置可用的聊天模型。
 
-已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.9.2`。
+已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.10.0`。
 
 ## 使用
 
@@ -70,7 +70,7 @@ git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 
 ## 物价图片
 
-两种物价命令都从 Poe2DB 的 14 个经济分类页采集中文名称与分类，并依据页面提供的英文词条名匹配行情数据，不维护物品名称对照表。由于不同站点的分类并非完全对应，图片类别以 Poe2DB 的物品页面归类为准。国际服价格来自 [poe.ninja 的公开 PoE2 经济接口](https://poe.ninja/docs/api)，国服价格来自 [poecurrency.top 的公开 API](https://poecurrency.top/api.html)。只显示直接以神圣石计价的物品，按类别展示；国际服按神圣石估价从高到低排序，国服沿用国际服对应物品的顺序。每张图片最多显示 50 项。
+两种物价图片都不再采集 Poe2DB 的经济分类页。国际服价格和物品图标来自 [poe.ninja 的公开 PoE2 经济接口](https://poe.ninja/docs/api)，按照神圣石价格从高到低排序；国服价格、中文名称和物品图标来自 [poecurrency.top 的公开 API](https://poecurrency.top/api.html)，只保留直接以神圣石计价的条目，并按照国际服物品顺序排列。国服接口中的英文名称用于匹配国际服物品并补充中文名称；暂未匹配到中文名称的国际服条目保留接口原名。两张图都会在物品名称左侧显示物品图标，每张最多显示 50 项。
 
 插件启动时会采集一次；之后默认按 UTC+8 每天 00:00、06:00、12:00、18:00 更新两张表。可在插件配置修改每日更新时间和 UTC 偏移。更新失败时保留上次成功的数据，并在 15 分钟后重试；物价命令直接返回最近一次采集的表格。如果首次采集期间有人查询物价，插件会先提示正在采集，并在对应服务器的数据和图片准备好后自动发回原会话。图片上会标注表格更新时间。行情源自身可能有缓存：poe.ninja 的数据约按小时更新，poecurrency.top 的汇总接口缓存 1 小时；定时任务会按时重新采集，源站数据仍以其实际更新时间为准。物价命令不调用聊天模型，但需要 AstrBot 的 HTML 图片渲染服务。价格仅供参考；poecurrency.top 说明其服务仅供个人非商业使用。
 
@@ -86,7 +86,7 @@ git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 
 修改更新时间或时区后重载插件。如果计划时段刷新失败，插件会在 15 分钟后重试；该时段的数据恢复并刷新成功后再发送一次通知。主动发送取决于当前平台适配器的能力。
 
-普通问答只按需读取 Poe2DB 与 PoE2Wiki；两种物价图片都从 Poe2DB 读取中文名称和分类，再分别从 poe.ninja、poecurrency.top 读取价格。插件不随仓库打包站点数据库或物品名称对照表。
+普通问答只按需读取 Poe2DB 与 PoE2Wiki；物价图片分别从 poe.ninja、poecurrency.top 读取实时数据，不请求 Poe2DB 经济页面。插件不随仓库打包站点数据库或物品名称对照表。
 
 ## 开发与资料依据
 

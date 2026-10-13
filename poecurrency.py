@@ -6,17 +6,23 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .economy import CurrencyRow, CurrencySnapshot, EconomyError, currency_key
+from .economy import (
+    CurrencyRow,
+    CurrencySnapshot,
+    EconomyError,
+    currency_key,
+    safe_currency_icon_url,
+)
 
 SUMMARY_URL = "https://poecurrency.top/api/summary?version=2"
-USER_AGENT = "AstrBot-PoE2DB/1.8.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.10.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 4_000_000
 CACHE_SECONDS = 3600
 CURRENCY_UNITS = {
@@ -77,6 +83,8 @@ def parse_national_summary(payload: object) -> CurrencySnapshot:
                 sell_change_percent=sell_change,
                 unit_label=unit,
                 sort_key=currency_key(english_name) if isinstance(english_name, str) else "",
+                category=str(category.get("category_label") or "通货")[:60],
+                icon_url=safe_currency_icon_url(item.get("item_icon")),
             )
         )
         timestamp = item.get("latest_datetime")
@@ -98,9 +106,9 @@ def parse_national_summary(payload: object) -> CurrencySnapshot:
 
 
 def parse_national_divine_summary(
-    payload: object, economy_names: Mapping[str, tuple[str, str]]
+    payload: object,
 ) -> CurrencySnapshot:
-    """Keep only national items directly quoted in Divine Orbs and named by Poe2DB."""
+    """Keep national items whose API quote is directly denominated in Divine Orbs."""
     if not isinstance(payload, list):
         raise EconomyError("国服物价数据格式不正确")
 
@@ -109,23 +117,23 @@ def parse_national_divine_summary(
     for category in payload:
         if not isinstance(category, dict) or not isinstance(category.get("items"), list):
             continue
+        category_label = category.get("category_label")
+        if not isinstance(category_label, str) or not category_label:
+            category_label = "通货"
         for item in category["items"]:
             if not isinstance(item, dict) or item.get("error") is True:
                 continue
             if item.get("currency_unit") != "d":
                 continue
             english_name = item.get("engname")
-            if not isinstance(english_name, str) or not english_name:
+            name = item.get("item_name")
+            if not isinstance(english_name, str) or not english_name or not isinstance(name, str) or not name:
                 continue
             sort_key = currency_key(english_name)
-            localized = economy_names.get(sort_key)
-            if not localized:
-                continue
             buy = _finite_number(item.get("buy_avg"))
             sell = _finite_number(item.get("sell_avg"))
             if buy is None or sell is None or (buy <= 0 and sell <= 0):
                 continue
-            name, item_category = localized
             row = CurrencyRow(
                 name=name[:90],
                 value=max(0.0, buy),
@@ -135,7 +143,8 @@ def parse_national_divine_summary(
                 sell_change_percent=_finite_number(item.get("sell_avg_ratio")),
                 unit_label="神圣石",
                 sort_key=sort_key,
-                category=item_category[:60],
+                category=category_label[:60],
+                icon_url=safe_currency_icon_url(item.get("item_icon")),
             )
             previous = rows_by_key.get(sort_key)
             if previous is None or row.value > previous.value:
@@ -148,7 +157,7 @@ def parse_national_divine_summary(
         sorted(rows_by_key.values(), key=lambda row: (-row.value, row.name))
     )
     if not rows:
-        raise EconomyError("国服物价中没有匹配到以神圣石计价的 Poe2DB 物品")
+        raise EconomyError("国服物价中没有以神圣石直接计价的物品")
     return CurrencySnapshot(
         league="当前赛季",
         reference="神圣石",
@@ -156,9 +165,30 @@ def parse_national_divine_summary(
         total_count=len(rows),
         generated_at=_now_text(),
         market="国服",
-        category_label="14 类经济物品",
+        category_label="国服物价",
         source_updated_at=max(timestamps) if timestamps else None,
     )
+
+
+def parse_national_chinese_names(payload: object) -> dict[str, str]:
+    """Build an English-name to Chinese-name map from the national API itself."""
+    if not isinstance(payload, list):
+        raise EconomyError("国服物价数据格式不正确")
+    names: dict[str, str] = {"divineorb": "神圣石"}
+    for category in payload:
+        if not isinstance(category, dict) or not isinstance(category.get("items"), list):
+            continue
+        for item in category["items"]:
+            if not isinstance(item, dict) or item.get("error") is True:
+                continue
+            english_name = item.get("engname")
+            chinese_name = item.get("item_name")
+            if not isinstance(english_name, str) or not english_name:
+                continue
+            if not isinstance(chinese_name, str) or not chinese_name:
+                continue
+            names[currency_key(english_name)] = chinese_name[:90]
+    return names
 
 
 def sort_national_snapshot(
@@ -242,11 +272,18 @@ class PoECurrencyClient:
         return parse_national_summary(self._download_payload_sync())
 
     async def current_divine_snapshot(
-        self, economy_names: Mapping[str, tuple[str, str]]
     ) -> CurrencySnapshot:
         """Fetch current national market data, keeping only Divine-denominated rows."""
         payload = await asyncio.to_thread(self._download_payload_sync)
-        return parse_national_divine_summary(payload, economy_names)
+        return parse_national_divine_summary(payload)
+
+    async def current_divine_data(self) -> tuple[CurrencySnapshot, dict[str, str]]:
+        """Fetch once for both the national chart and Chinese item localization."""
+        payload = await asyncio.to_thread(self._download_payload_sync)
+        return (
+            parse_national_divine_summary(payload),
+            parse_national_chinese_names(payload),
+        )
 
     async def current_currency(self) -> CurrencySnapshot:
         if self._cached_snapshot and self._cached_until > time.monotonic():

@@ -1,4 +1,4 @@
-"""National price filtering and live Poe2DB name matching."""
+"""National Divine prices, native Chinese names, and item icons."""
 
 import sys
 import unittest
@@ -6,11 +6,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_poe2db.economy import EconomyError
+from astrbot_plugin_poe2db.economy import CurrencyRow, EconomyError, render_currency_html
 from astrbot_plugin_poe2db.poecurrency import (
     PoECurrencyClient,
     SUMMARY_URL,
     parse_national_divine_summary,
+    parse_national_chinese_names,
+    sort_national_snapshot,
 )
 
 
@@ -27,6 +29,7 @@ def summary_payload():
                     "buy_avg_ratio": 2.5,
                     "sell_avg_ratio": 1.5,
                     "currency_unit": "d",
+                    "item_icon": "https://cdn.poe2db.tw/image/mirror.webp",
                     "latest_datetime": "2026-10-13 06:00:00",
                 },
                 {
@@ -76,31 +79,49 @@ def summary_payload():
 
 
 class NationalPriceTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self.names = {
-            "mirrorofkalandra": ("卡兰德的魔镜", "通货"),
-            "refinedsibilantcatalyst": ("精炼嘶语催化剂", "裂隙"),
-            "chaosorb": ("混沌石", "通货"),
-        }
-
-    def test_filters_to_direct_divine_quotes_and_poe2db_names(self):
-        snapshot = parse_national_divine_summary(summary_payload(), self.names)
+    def test_filters_direct_divine_quotes_using_national_names_and_icons(self):
+        snapshot = parse_national_divine_summary(summary_payload())
         self.assertEqual(snapshot.reference, "神圣石")
-        self.assertEqual(snapshot.category_label, "14 类经济物品")
-        self.assertEqual(snapshot.total_count, 2)
+        self.assertEqual(snapshot.category_label, "国服物价")
+        self.assertEqual(snapshot.total_count, 3)
         self.assertEqual(
             [row.name for row in snapshot.rows],
-            ["卡兰德的魔镜", "精炼嘶语催化剂"],
+            ["卡兰德的魔镜", "未知物品", "精炼嘶语催化剂"],
         )
         self.assertEqual(snapshot.rows[0].value, 3200.0)
         self.assertEqual(snapshot.rows[0].unit_label, "神圣石")
-        self.assertEqual(snapshot.rows[1].category, "裂隙")
+        self.assertEqual(snapshot.rows[0].category, "通货仓库")
+        self.assertEqual(snapshot.rows[0].icon_url, "https://cdn.poe2db.tw/image/mirror.webp")
+        self.assertEqual(snapshot.rows[2].category, "催化剂")
+        markup = render_currency_html(snapshot)
+        icon = '<img class="item-icon" src="https://cdn.poe2db.tw/image/mirror.webp" alt="">'
+        self.assertIn(icon, markup)
+        self.assertLess(markup.index(icon), markup.index("卡兰德的魔镜"))
 
     def test_empty_divine_matches_are_reported(self):
         with self.assertRaises(EconomyError):
-            parse_national_divine_summary([], self.names)
+            parse_national_divine_summary([])
 
-    async def test_scheduled_fetch_reads_the_summary_endpoint(self):
+    def test_national_api_supplies_chinese_names_for_all_price_units(self):
+        names = parse_national_chinese_names(summary_payload())
+        self.assertEqual(names["mirrorofkalandra"], "卡兰德的魔镜")
+        self.assertEqual(names["chaosorb"], "混沌石")
+        self.assertEqual(names["divineorb"], "神圣石")
+
+    def test_national_prices_follow_the_live_international_order(self):
+        national = parse_national_divine_summary(summary_payload())
+        international_order = (
+            CurrencyRow("精炼嘶语催化剂", 2.0, None, (), sort_key="refinedsibilantcatalyst"),
+            CurrencyRow("卡兰德的魔镜", 1.0, None, (), sort_key="mirrorofkalandra"),
+            CurrencyRow("未知物品", 0.5, None, (), sort_key="unknownitem"),
+        )
+        reordered = sort_national_snapshot(national, international_order)
+        self.assertEqual(
+            [row.name for row in reordered.rows],
+            ["精炼嘶语催化剂", "卡兰德的魔镜", "未知物品"],
+        )
+
+    async def test_scheduled_fetch_reads_the_summary_once_for_prices_and_names(self):
         class FixtureClient(PoECurrencyClient):
             def __init__(self):
                 super().__init__()
@@ -111,9 +132,10 @@ class NationalPriceTests(unittest.IsolatedAsyncioTestCase):
                 return summary_payload()
 
         client = FixtureClient()
-        snapshot = await client.current_divine_snapshot(self.names)
+        snapshot, names = await client.current_divine_data()
         self.assertEqual(client.calls, 1)
-        self.assertEqual(snapshot.total_count, 2)
+        self.assertEqual(snapshot.total_count, 3)
+        self.assertEqual(names["mirrorofkalandra"], "卡兰德的魔镜")
 
     def test_api_url_allowlist_is_exact(self):
         self.assertTrue(PoECurrencyClient._allowed(SUMMARY_URL))

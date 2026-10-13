@@ -125,7 +125,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.9.2",
+    "1.10.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -139,6 +139,7 @@ class Poe2DBPlugin(Star):
         self.economy = NinjaEconomyClient(timeout)
         self.national_economy = PoECurrencyClient(timeout)
         self._price_snapshots: dict[str, CurrencySnapshot] = {}
+        self._national_chinese_names: dict[str, str] = {"divineorb": "神圣石"}
         self._pending_price_requests: set[tuple[str, str]] = set()
         self._known_group_umos: set[str] = set()
         self._price_refresh_lock = asyncio.Lock()
@@ -163,25 +164,28 @@ class Poe2DBPlugin(Star):
     async def _refresh_price_tables(self) -> bool:
         complete = True
         async with self._price_refresh_lock:
-            try:
-                economy_names = await self.client.economy_names()
-            except Exception as exc:
-                self._warn_price_refresh("Poe2DB 名称", exc)
-                return False
-
-            international_result, national_result = await asyncio.gather(
+            international_result, national_data = await asyncio.gather(
                 self.economy.current_economy(force_refresh=True),
-                self.national_economy.current_divine_snapshot(economy_names),
+                self.national_economy.current_divine_data(),
                 return_exceptions=True,
             )
 
+            national_result: CurrencySnapshot | None = None
+            if (
+                isinstance(national_data, tuple)
+                and len(national_data) == 2
+                and isinstance(national_data[0], CurrencySnapshot)
+                and isinstance(national_data[1], dict)
+            ):
+                national_result, self._national_chinese_names = national_data
+            else:
+                self._warn_price_refresh("国服物价", national_data)
+                complete = False
+
             if isinstance(international_result, CurrencySnapshot):
                 try:
-                    chinese_league = await self.client.chinese_league_name(
-                        international_result.league
-                    )
                     localized = localize_currency_snapshot(
-                        international_result, economy_names, chinese_league
+                        international_result, self._national_chinese_names, None
                     )
                     self._price_snapshots["international"] = localized
                 except Exception as exc:
@@ -191,16 +195,13 @@ class Poe2DBPlugin(Star):
                 self._warn_price_refresh("国际服物价", international_result)
                 complete = False
 
-            if isinstance(national_result, CurrencySnapshot):
+            if national_result is not None:
                 international = self._price_snapshots.get("international")
                 if international and international.rows:
                     national_result = sort_national_snapshot(
                         national_result, international.rows
                     )
                 self._price_snapshots["national"] = national_result
-            else:
-                self._warn_price_refresh("国服物价", national_result)
-                complete = False
 
         return complete
 

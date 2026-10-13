@@ -12,41 +12,18 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 LEAGUES_URL = "https://poe.ninja/poe2/api/economy/leagues"
 OVERVIEW_URL = "https://poe.ninja/poe2/api/economy/exchange/current/overview"
-USER_AGENT = "AstrBot-PoE2DB/1.8.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.10.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 2_000_000
 LEAGUES_CACHE_SECONDS = 300
 PRICES_CACHE_SECONDS = 1800
 IMAGE_ROWS = 50
 
-# Poe2DB exposes 14 Chinese economy pages. These names are scraped separately
-# from the poe.ninja exchange types because the two sites' category lists do
-# not line up one-to-one (for example, poe.ninja's Verisium is not Atziri's
-# Temple). Item-level English slugs are the matching key.
-POE2DB_ECONOMY_PAGES = (
-    ("通货", "Economy_Currency"),
-    ("碎片", "Economy_Fragments"),
-    ("驱灵仪式", "Economy_Ritual"),
-    ("精华", "Economy_Essences"),
-    ("裂隙", "Economy_Breach"),
-    ("惊悸迷雾", "Economy_Delirium"),
-    ("先祖秘藏", "Economy_Expedition"),
-    ("符文", "Economy_Runes"),
-    ("灵核", "Economy_Soul_Cores"),
-    ("雕像", "Economy_Idols"),
-    ("未切割的宝石", "Economy_Uncut_Gems"),
-    ("深渊", "Economy_Abyss"),
-    ("宝石", "Economy_Gems"),
-    ("阿兹里神庙", "Economy_Atziris_Temple"),
-)
-
-# poe.ninja's supported PoE2 exchange API types. Verisium is queried as its
-# own type and is not assigned to a Poe2DB page category; when a returned item
-# has a Poe2DB English slug, localization supplies the correct page category.
+# poe.ninja's supported PoE2 exchange API types and their Chinese display labels.
 EXCHANGE_CATEGORIES = (
     ("Currency", "通货"),
     ("Fragments", "碎片"),
@@ -81,6 +58,7 @@ class CurrencyRow:
     unit_label: str | None = None
     sort_key: str = ""
     category: str = ""
+    icon_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +90,37 @@ def currency_key(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.casefold())
 
 
+def safe_currency_icon_url(value: object) -> str | None:
+    """Allow only the static item image paths returned by our two price APIs."""
+    if not isinstance(value, str) or not value or "\\" in value:
+        return None
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.query or parts.fragment or parts.username or parts.password or port is not None:
+        return None
+    decoded_segments = [unquote(segment) for segment in parts.path.split("/")]
+    if any(segment in {".", ".."} or "\\" in segment for segment in decoded_segments):
+        return None
+    if not parts.scheme and not parts.netloc and parts.path.startswith("/gen/image/"):
+        return "https://poe.ninja" + parts.path
+    if (
+        parts.scheme == "https"
+        and parts.hostname == "poe.ninja"
+        and parts.path.startswith("/gen/image/")
+    ):
+        return "https://poe.ninja" + parts.path
+    if (
+        parts.scheme == "https"
+        and parts.hostname == "cdn.poe2db.tw"
+        and parts.path.startswith("/image/")
+    ):
+        return "https://cdn.poe2db.tw" + parts.path
+    return None
+
+
 def localize_currency_snapshot(
     snapshot: CurrencySnapshot,
     chinese_names: dict[str, str | tuple[str, str]],
@@ -124,7 +133,7 @@ def localize_currency_snapshot(
         else reference_entry
     )
     if not isinstance(reference, str) or not reference:
-        raise EconomyError("报价基准通货缺少中文名称")
+        reference = "神圣石" if currency_key(snapshot.reference) in {"divine", "divineorb"} else snapshot.reference
     localized_rows: list[CurrencyRow] = []
     for row in snapshot.rows:
         key = row.sort_key or currency_key(row.name)
@@ -135,7 +144,9 @@ def localize_currency_snapshot(
             name = entry[0]
             category = entry[1] if len(entry) > 1 else row.category
         else:
-            continue
+            # Keep the live price row if the Chinese source has no translation
+            # for a newly added item yet.
+            name, category = row.name, row.category
         if isinstance(name, str) and name:
             localized_rows.append(
                 replace(row, name=name[:90], category=(category or row.category)[:60])
@@ -334,7 +345,7 @@ def parse_currency_overview(
     if require_divine and currency_key(reference) not in {"divine", "divineorb"}:
         raise EconomyError("此经济分类不是以神圣石报价")
     names = {
-        item["id"]: (item["name"], item.get("detailsId"))
+        item["id"]: (item["name"], item.get("detailsId"), item.get("image"))
         for item in items
         if isinstance(item, dict)
         and isinstance(item.get("id"), str)
@@ -361,7 +372,7 @@ def parse_currency_overview(
             if isinstance(raw_trend, list)
             else ()
         )
-        item_name, details_id = names[line_id]
+        item_name, details_id, image = names[line_id]
         stable_key = (
             currency_key(details_id)
             if isinstance(details_id, str) and details_id
@@ -375,6 +386,7 @@ def parse_currency_overview(
                 trend,
                 sort_key=stable_key,
                 category=category_label,
+                icon_url=safe_currency_icon_url(image),
             )
         )
     if not rows and not allow_empty:
@@ -431,6 +443,16 @@ def render_currency_html(snapshot: CurrencySnapshot) -> str:
     rows: list[str] = []
     display_rows = snapshot.rows[:IMAGE_ROWS]
     for index, row in enumerate(display_rows, 1):
+        icon_url = safe_currency_icon_url(row.icon_url)
+        icon = (
+            f'<img class="item-icon" src="{_safe_html(icon_url)}" alt="">'
+            if icon_url
+            else ""
+        )
+        name_cell = (
+            f'<span class="item-name-cell">{icon}'
+            f'<span class="name-label">{_safe_html(row.name)}</span></span>'
+        )
         change = row.change_percent
         change_text = "—" if change is None else f"{change:+.1f}%"
         change_class = "flat" if change is None else ("up" if change >= 0 else "down")
@@ -453,7 +475,7 @@ def render_currency_html(snapshot: CurrencySnapshot) -> str:
                 "<tr>"
                 f'<td class="rank">{index:02d}</td>'
                 f'<td class="category">{_safe_html(row.category or snapshot.category_label)}</td>'
-                f'<td class="name">{_safe_html(row.name)}</td>'
+                f'<td class="name">{name_cell}</td>'
                 f'<td class="metric">{buy_value}</td>'
                 f'<td class="metric">{sell_value}</td>'
                 f'<td class="delta {change_class}">{change_text}</td>'
@@ -465,7 +487,7 @@ def render_currency_html(snapshot: CurrencySnapshot) -> str:
                 "<tr>"
                 f'<td class="rank">{index:02d}</td>'
                 f'<td class="category">{_safe_html(row.category or snapshot.category_label or "通货")}</td>'
-                f'<td class="name">{_safe_html(row.name)}</td>'
+                f'<td class="name">{name_cell}</td>'
                 f'<td class="price">{_format_price(row.value)}</td>'
                 f'<td class="trend">{_trend_svg(row.trend, change is not None and change >= 0)}'
                 f'<span class="{change_class}">{change_text}</span></td>'
@@ -485,7 +507,10 @@ font-weight:600;text-align:left;background:#223340;padding:10px 12px;border-bott
 td{height:43px;padding:7px 12px;border-bottom:1px solid #2c3d4a;white-space:nowrap}
 tbody tr:nth-child(even){background:#1d2b37}.rank{width:48px;color:#7490a3}
 .category{width:128px;color:#9eb2c2;font-size:13px;overflow:hidden;text-overflow:ellipsis}
-.name{width:40%;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.name{width:40%;overflow:hidden;font-weight:600}
+.item-name-cell{display:flex;align-items:center;gap:10px;min-width:0;overflow:hidden}
+.item-icon{width:30px;height:30px;object-fit:contain;flex:0 0 30px}
+.name-label{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .price{width:160px;color:#d3e9ff;font-variant-numeric:tabular-nums;font-weight:700}
 .national .category{width:116px}.national .name{width:31%}
 .national .metric{width:14%;color:#d3e9ff;font-weight:700}

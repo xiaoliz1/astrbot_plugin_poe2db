@@ -10,10 +10,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_poe2db.poe2db import (
     BASE_URLS,
-    CURRENCY_PAGE,
-    LEAGUE_CN_PAGE,
-    LEAGUE_US_PAGE,
-    POE2DB_ECONOMY_PAGES,
     Poe2DBClient,
     Poe2DBError,
     parse_query_terms,
@@ -51,51 +47,6 @@ def detail_html(title, body, self_href):
 
 
 class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_collects_names_from_all_14_economy_pages(self):
-        pages = {}
-        for index, (category, slug) in enumerate(POE2DB_ECONOMY_PAGES):
-            pages[BASE_URLS["cn"] + slug] = f"""
-            <html><head><title>{category}</title></head><body>
-              <div class="page-content"><table><tr><td><div>
-                <a href="Economy_item-{index}">测试物品{index}</a>
-                <a href="Item_{index}">Wiki</a>
-              </div></td></tr></table></div>
-            </body></html>
-            """
-        client = FixtureClient(pages)
-
-        names = await client.economy_names()
-
-        self.assertEqual(len(POE2DB_ECONOMY_PAGES), 14)
-        self.assertEqual(len(client.visited), 14)
-        self.assertEqual(
-            {category for _, category in names.values()},
-            {category for category, _ in POE2DB_ECONOMY_PAGES},
-        )
-        self.assertEqual(names["item13"], ("测试物品13", POE2DB_ECONOMY_PAGES[-1][0]))
-
-    async def test_economy_page_collects_chinese_names_and_english_wiki_aliases(self):
-        url = "https://poe2db.tw/cn/Economy_Fragments"
-        html = """
-        <html><head><title>碎片 - Poe2DB</title></head><body>
-          <div class="page-content"><table>
-            <tr><th>物品</th></tr>
-            <tr><td><div>
-              <a href="Economy_trialmasters-reliquary-key">试炼使者的圣物厅钥匙</a>
-              <a href="The_Trialmasters_Reliquary_Key">Wiki</a>
-            </div></td></tr>
-          </table></div>
-        </body></html>
-        """
-        client = FixtureClient({url: html})
-
-        names = await client._economy_page_names("碎片", "Economy_Fragments")
-
-        self.assertEqual(
-            names["thetrialmastersreliquarykey"],
-            ("试炼使者的圣物厅钥匙", "碎片"),
-        )
-
     async def test_exact_search_becomes_canonical_source(self):
         query_url = search_url("碎骨")
         client = FixtureClient(
@@ -289,33 +240,6 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(Poe2DBClient._allowed("https://example.com/tw/Boneshatter"))
         with self.assertRaises(ValueError):
             search_url("碎骨", "en")
-
-    async def test_currency_names_and_league_name_are_read_from_live_page_shapes(self):
-        client = FixtureClient({
-            CURRENCY_PAGE: (
-                "<title>Currency_Exchange - 流亡2编年史</title>"
-                "<div class='page-content'>"
-                "<a class='item_currency StackableCurrency' href='Mirror_of_Kalandra'>"
-                "<img src='mirror.png'></a>"
-                "<a class='item_currency StackableCurrency' href='Mirror_of_Kalandra'>卡兰德的魔镜</a>"
-                "<a class='item_currency' href='Divine_Orb'>神圣石</a>"
-                "</div>"
-            ),
-            LEAGUE_CN_PAGE: (
-                "<title>赛季 - 流亡2编年史</title><div class='page-content'>"
-                "<table><tr><td>0.5.5</td><td>禁断仪式</td></tr></table></div>"
-            ),
-            LEAGUE_US_PAGE: (
-                "<title>Leagues - PoE2DB</title><div class='page-content'>"
-                "<table><tr><td>0.5.5</td><td>Forbidden Rites</td></tr></table></div>"
-            ),
-        })
-        names = await client.currency_names()
-        self.assertEqual(names["mirrorofkalandra"], "卡兰德的魔镜")
-        self.assertEqual(names["divineorb"], "神圣石")
-        self.assertEqual(await client.chinese_league_name("Forbidden Rites"), "禁断仪式")
-        self.assertEqual(await client.chinese_league_name("Unknown Season"), None)
-
 
 if __name__ == "__main__":
     unittest.main()
