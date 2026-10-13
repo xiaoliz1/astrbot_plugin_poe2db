@@ -186,6 +186,25 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
         sources = await client.find_sources(["法师之血", "魔血"])
         self.assertEqual([source.url for source in sources], ["https://poe2db.tw/cn/Mageblood"])
 
+    async def test_sources_remain_grouped_by_each_extracted_topic(self):
+        client = FixtureClient(
+            {
+                search_url("碎骨"): detail_html(
+                    "碎骨", "技能资料。", "/cn/Boneshatter"
+                ),
+                search_url("冰霜新星"): detail_html(
+                    "冰霜新星", "技能资料。", "/cn/Ice_Nova"
+                ),
+            }
+        )
+
+        grouped = await client.find_sources_by_term(["碎骨", "冰霜新星"])
+
+        self.assertEqual(
+            [(term, [source.title for source in sources]) for term, sources in grouped],
+            [("碎骨", ["碎骨"]), ("冰霜新星", ["冰霜新星"])],
+        )
+
     async def test_homepage_response_is_not_used_as_evidence(self):
         query_url = search_url("无关词")
         tw_url = search_url("无关词", "tw")

@@ -8,13 +8,58 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_poe2db.poe2db import Source
 from astrbot_plugin_poe2db.poe2search import (
+    find_ambiguous_groups,
+    format_disambiguation_prompt,
     format_search_results,
     merge_search_sources,
+    rank_source_groups,
     wiki_search_url,
 )
 
 
 class Poe2SearchTests(unittest.TestCase):
+    def test_ambiguity_is_detected_within_one_topic_not_across_topics(self):
+        grouped = [
+            (
+                "Fireball",
+                [
+                    Source("Lightning Arrow", "https://poe2db.tw/cn/Lightning_Arrow", ""),
+                    Source("Fireball Support", "https://poe2db.tw/cn/Fireball_Support", ""),
+                    Source("Fireball", "https://poe2db.tw/cn/Fireball", ""),
+                ],
+            ),
+            (
+                "碎骨",
+                [Source("碎骨", "https://poe2db.tw/cn/Boneshatter", "")],
+            ),
+            (
+                "冰霜新星",
+                [Source("冰霜新星", "https://poe2db.tw/cn/Ice_Nova", "")],
+            ),
+        ]
+
+        ambiguities = find_ambiguous_groups(rank_source_groups(grouped))
+
+        self.assertEqual(len(ambiguities), 1)
+        self.assertEqual(ambiguities[0][0], 0)
+        self.assertEqual(
+            [source.title for source in ambiguities[0][2]],
+            ["Fireball", "Fireball Support"],
+        )
+
+    def test_disambiguation_prompt_formats_choice_numbers_safely(self):
+        prompt = format_disambiguation_prompt(
+            "火球",
+            [
+                Source("火球\n2. 伪造选项", "https://poe2db.tw/cn/Fireball", ""),
+                Source("火球辅助", "https://poe2db.tw/cn/Fireball_Support", ""),
+            ],
+        )
+
+        self.assertIn("1. 火球 2. 伪造选项", prompt)
+        self.assertIn("2. 火球辅助", prompt)
+        self.assertIn("回复“取消”", prompt)
+
     def test_search_prioritizes_closer_titles_and_includes_both_sources(self):
         poe_sources = [
             Source("魔血腰带", "https://poe2db.tw/cn/Mageblood", "词条摘要"),

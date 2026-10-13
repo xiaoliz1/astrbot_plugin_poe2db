@@ -21,6 +21,20 @@ def _normalized(value: str) -> str:
     return re.sub(r"[\W_]+", "", value)
 
 
+def _title_rank(query: str, title: str) -> float:
+    wanted = _normalized(query)
+    normalized_title = _normalized(title)
+    if not wanted or not normalized_title:
+        return 1.0
+    if wanted == normalized_title:
+        return -0.1
+    if wanted in normalized_title:
+        return 0.0
+    if normalized_title in wanted:
+        return 0.15
+    return 1.0 - SequenceMatcher(None, wanted, normalized_title).ratio()
+
+
 def _allowed_source(source: Source) -> bool:
     try:
         parts = urlsplit(source.url)
@@ -44,23 +58,60 @@ def _allowed_source(source: Source) -> bool:
 
 
 def _ranked(query: str, sources: list[Source]) -> list[Source]:
-    wanted = _normalized(query)
-    if not wanted:
-        return list(sources)
-
     def rank(item: tuple[int, Source]) -> tuple[float, int]:
         index, source = item
-        title = _normalized(source.title)
-        if wanted == title:
-            return -0.1, index
-        if wanted in title:
-            return 0.0, index
-        if title and title in wanted:
-            return 0.15, index
-        similarity = SequenceMatcher(None, wanted, title).ratio()
-        return 1.0 - similarity, index
+        return _title_rank(query, source.title), index
 
     return [source for _, source in sorted(enumerate(sources), key=rank)]
+
+
+def rank_source_groups(
+    grouped_sources: list[tuple[str, list[Source]]],
+) -> list[tuple[str, list[Source]]]:
+    """Rank each extracted topic independently, preserving its group."""
+    return [(query, _ranked(query, sources)) for query, sources in grouped_sources]
+
+
+def find_ambiguous_groups(
+    grouped_sources: list[tuple[str, list[Source]]],
+    *,
+    max_candidates: int = 5,
+    max_rank: float = 0.15,
+    max_rank_gap: float = 0.12,
+) -> list[tuple[int, str, list[Source]]]:
+    """Return same-query groups with at least two similarly relevant titles."""
+    if max_candidates < 2:
+        return []
+    ambiguous: list[tuple[int, str, list[Source]]] = []
+    for group_index, (query, sources) in enumerate(grouped_sources):
+        ranked = _ranked(query, sources)
+        if len(ranked) < 2:
+            continue
+        best_rank = _title_rank(query, ranked[0].title)
+        candidates: list[Source] = []
+        seen_titles: set[str] = set()
+        for source in ranked:
+            rank = _title_rank(query, source.title)
+            if rank > max_rank or rank - best_rank > max_rank_gap:
+                break
+            title_key = _normalized(source.title)
+            if title_key and title_key not in seen_titles:
+                seen_titles.add(title_key)
+                candidates.append(source)
+            if len(candidates) >= max_candidates:
+                break
+        if len(candidates) >= 2:
+            ambiguous.append((group_index, query, candidates))
+    return ambiguous
+
+
+def format_disambiguation_prompt(query: str, candidates: list[Source]) -> str:
+    lines = [f"“{query}”可能对应多个词条，请选择："]
+    for index, source in enumerate(candidates, 1):
+        title = re.sub(r"\s+", " ", source.title).strip()[:100] or "未命名词条"
+        lines.append(f"{index}. {title}")
+    lines.append("请在 60 秒内回复编号；回复“取消”可结束选择。")
+    return "\n".join(lines)
 
 
 def merge_search_sources(

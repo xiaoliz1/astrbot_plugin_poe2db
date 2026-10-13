@@ -21,7 +21,7 @@ BASE_URLS = {
 }
 PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.7.3 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.7.4 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 CURRENCY_PAGE = BASE_URLS["cn"] + "Currency_Exchange"
 LEAGUE_CN_PAGE = BASE_URLS["cn"] + "League"
 LEAGUE_US_PAGE = "https://poe2db.tw/us/League"
@@ -405,13 +405,17 @@ class Poe2DBClient:
         slug = parts.path.split("/", 2)[2]
         return slug.casefold() + ("?" + parts.query if parts.query else "")
 
-    async def find_sources(
-        self, terms: list[str], max_sources: int = 2, max_chars: int = 5000
-    ) -> list[Source]:
-        sources: list[Source] = []
-        seen: set[str] = set()
+    async def find_sources_by_term(
+        self, terms: list[str], max_sources: int = 6, max_chars: int = 5000
+    ) -> list[tuple[str, list[Source]]]:
+        """Keep each extracted topic's results separate for disambiguation."""
+        if max_sources <= 0:
+            return []
+        grouped: list[tuple[str, list[Source]]] = []
         successful_searches = 0
         for term in terms[:2]:
+            term_sources: list[Source] = []
+            seen_for_term: set[str] = set()
             for locale in PREFERRED_LOCALES:
                 try:
                     found = await self._search_term(term, locale, max_chars)
@@ -420,13 +424,32 @@ class Poe2DBClient:
                 successful_searches += 1
                 for source in found:
                     key = self._source_key(source.url)
-                    if key not in seen:
-                        sources.append(source)
-                        seen.add(key)
-                    if len(sources) >= max_sources:
-                        return sources
+                    if key not in seen_for_term:
+                        term_sources.append(source)
+                        seen_for_term.add(key)
+                    if len(term_sources) >= max_sources:
+                        break
                 if found:
                     break
-        if not sources and not successful_searches:
+            grouped.append((term, term_sources))
+        if not successful_searches:
             raise Poe2DBError("简体与繁体资料页均无法读取")
+        return grouped
+
+    async def find_sources(
+        self, terms: list[str], max_sources: int = 2, max_chars: int = 5000
+    ) -> list[Source]:
+        if max_sources <= 0:
+            return []
+        grouped = await self.find_sources_by_term(terms, max_sources, max_chars)
+        sources: list[Source] = []
+        seen: set[str] = set()
+        for _, term_sources in grouped:
+            for source in term_sources:
+                key = self._source_key(source.url)
+                if key not in seen:
+                    sources.append(source)
+                    seen.add(key)
+                if len(sources) >= max_sources:
+                    return sources
         return sources
