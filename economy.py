@@ -17,7 +17,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 LEAGUES_URL = "https://poe.ninja/poe2/api/economy/leagues"
 OVERVIEW_URL = "https://poe.ninja/poe2/api/economy/exchange/current/overview"
-USER_AGENT = "AstrBot-PoE2DB/1.6 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.7 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 2_000_000
 LEAGUES_CACHE_SECONDS = 300
 PRICES_CACHE_SECONDS = 1800
@@ -169,6 +169,17 @@ class NinjaEconomyClient:
             return result
 
     async def current_currency(self) -> CurrencySnapshot:
+        league_id, league_name = await self._current_league()
+        url = OVERVIEW_URL + "?" + urlencode({"league": league_id, "type": "Currency"})
+        overview = await self._get_json(url, PRICES_CACHE_SECONDS)
+        return parse_currency_overview(league_name, overview)
+
+    async def current_league_name(self) -> str:
+        """Return the current challenge league name without fetching price data."""
+        _, league_name = await self._current_league()
+        return league_name
+
+    async def _current_league(self) -> tuple[str, str]:
         leagues = await self._get_json(LEAGUES_URL, LEAGUES_CACHE_SECONDS)
         if not isinstance(leagues, list) or not leagues or not isinstance(leagues[0], dict):
             raise EconomyError("未取得当前赛季")
@@ -179,9 +190,7 @@ class NinjaEconomyClient:
             raise EconomyError("当前赛季名称无效")
         if not isinstance(league_name, str) or not league_name.strip():
             league_name = league_id
-        url = OVERVIEW_URL + "?" + urlencode({"league": league_id, "type": "Currency"})
-        overview = await self._get_json(url, PRICES_CACHE_SECONDS)
-        return parse_currency_overview(league_name, overview)
+        return league_id.strip(), league_name.strip()
 
 
 def parse_currency_overview(league: str, overview: object) -> CurrencySnapshot:
