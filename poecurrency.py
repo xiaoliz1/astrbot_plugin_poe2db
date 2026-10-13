@@ -6,7 +6,7 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
@@ -16,7 +16,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from .economy import CurrencyRow, CurrencySnapshot, EconomyError, currency_key
 
 SUMMARY_URL = "https://poecurrency.top/api/summary?version=2"
-USER_AGENT = "AstrBot-PoE2DB/1.6 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.8.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 4_000_000
 CACHE_SECONDS = 3600
 CURRENCY_UNITS = {
@@ -97,6 +97,70 @@ def parse_national_summary(payload: object) -> CurrencySnapshot:
     )
 
 
+def parse_national_divine_summary(
+    payload: object, economy_names: Mapping[str, tuple[str, str]]
+) -> CurrencySnapshot:
+    """Keep only national items directly quoted in Divine Orbs and named by Poe2DB."""
+    if not isinstance(payload, list):
+        raise EconomyError("国服物价数据格式不正确")
+
+    rows_by_key: dict[str, CurrencyRow] = {}
+    timestamps: list[str] = []
+    for category in payload:
+        if not isinstance(category, dict) or not isinstance(category.get("items"), list):
+            continue
+        for item in category["items"]:
+            if not isinstance(item, dict) or item.get("error") is True:
+                continue
+            if item.get("currency_unit") != "d":
+                continue
+            english_name = item.get("engname")
+            if not isinstance(english_name, str) or not english_name:
+                continue
+            sort_key = currency_key(english_name)
+            localized = economy_names.get(sort_key)
+            if not localized:
+                continue
+            buy = _finite_number(item.get("buy_avg"))
+            sell = _finite_number(item.get("sell_avg"))
+            if buy is None or sell is None or (buy <= 0 and sell <= 0):
+                continue
+            name, item_category = localized
+            row = CurrencyRow(
+                name=name[:90],
+                value=max(0.0, buy),
+                change_percent=_finite_number(item.get("buy_avg_ratio")),
+                trend=(),
+                sell_value=max(0.0, sell),
+                sell_change_percent=_finite_number(item.get("sell_avg_ratio")),
+                unit_label="神圣石",
+                sort_key=sort_key,
+                category=item_category[:60],
+            )
+            previous = rows_by_key.get(sort_key)
+            if previous is None or row.value > previous.value:
+                rows_by_key[sort_key] = row
+            timestamp = item.get("latest_datetime")
+            if isinstance(timestamp, str) and timestamp:
+                timestamps.append(timestamp[:40])
+
+    rows = tuple(
+        sorted(rows_by_key.values(), key=lambda row: (-row.value, row.name))
+    )
+    if not rows:
+        raise EconomyError("国服物价中没有匹配到以神圣石计价的 Poe2DB 物品")
+    return CurrencySnapshot(
+        league="当前赛季",
+        reference="神圣石",
+        rows=rows,
+        total_count=len(rows),
+        generated_at=_now_text(),
+        market="国服",
+        category_label="14 类经济物品",
+        source_updated_at=max(timestamps) if timestamps else None,
+    )
+
+
 def sort_national_snapshot(
     snapshot: CurrencySnapshot, international_rows: Sequence[CurrencyRow]
 ) -> CurrencySnapshot:
@@ -147,7 +211,7 @@ class PoECurrencyClient:
             and parse_qs(parts.query) == {"version": ["2"]}
         )
 
-    def _download_sync(self) -> CurrencySnapshot:
+    def _download_payload_sync(self) -> object:
         if not self._allowed(SUMMARY_URL):
             raise EconomyError("国服物价网址不在允许范围内")
         request = Request(
@@ -170,10 +234,19 @@ class PoECurrencyClient:
         if len(data) > MAX_JSON_BYTES:
             raise EconomyError("国服物价响应过大，已停止读取")
         try:
-            payload = json.loads(data)
+            return json.loads(data)
         except (ValueError, UnicodeError) as exc:
             raise EconomyError("国服物价接口没有返回有效 JSON") from exc
-        return parse_national_summary(payload)
+
+    def _download_sync(self) -> CurrencySnapshot:
+        return parse_national_summary(self._download_payload_sync())
+
+    async def current_divine_snapshot(
+        self, economy_names: Mapping[str, tuple[str, str]]
+    ) -> CurrencySnapshot:
+        """Fetch current national market data, keeping only Divine-denominated rows."""
+        payload = await asyncio.to_thread(self._download_payload_sync)
+        return parse_national_divine_summary(payload, economy_names)
 
     async def current_currency(self) -> CurrencySnapshot:
         if self._cached_snapshot and self._cached_until > time.monotonic():

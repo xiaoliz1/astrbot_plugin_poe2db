@@ -4,12 +4,16 @@ import sys
 import unittest
 from pathlib import Path
 
+from bs4 import BeautifulSoup
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_poe2db.poe2db import (
+    BASE_URLS,
     CURRENCY_PAGE,
     LEAGUE_CN_PAGE,
     LEAGUE_US_PAGE,
+    POE2DB_ECONOMY_PAGES,
     Poe2DBClient,
     Poe2DBError,
     parse_query_terms,
@@ -47,6 +51,51 @@ def detail_html(title, body, self_href):
 
 
 class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_collects_names_from_all_14_economy_pages(self):
+        pages = {}
+        for index, (category, slug) in enumerate(POE2DB_ECONOMY_PAGES):
+            pages[BASE_URLS["cn"] + slug] = f"""
+            <html><head><title>{category}</title></head><body>
+              <div class="page-content"><table><tr><td><div>
+                <a href="Economy_item-{index}">测试物品{index}</a>
+                <a href="Item_{index}">Wiki</a>
+              </div></td></tr></table></div>
+            </body></html>
+            """
+        client = FixtureClient(pages)
+
+        names = await client.economy_names()
+
+        self.assertEqual(len(POE2DB_ECONOMY_PAGES), 14)
+        self.assertEqual(len(client.visited), 14)
+        self.assertEqual(
+            {category for _, category in names.values()},
+            {category for category, _ in POE2DB_ECONOMY_PAGES},
+        )
+        self.assertEqual(names["item13"], ("测试物品13", POE2DB_ECONOMY_PAGES[-1][0]))
+
+    async def test_economy_page_collects_chinese_names_and_english_wiki_aliases(self):
+        url = "https://poe2db.tw/cn/Economy_Fragments"
+        html = """
+        <html><head><title>碎片 - Poe2DB</title></head><body>
+          <div class="page-content"><table>
+            <tr><th>物品</th></tr>
+            <tr><td><div>
+              <a href="Economy_trialmasters-reliquary-key">试炼使者的圣物厅钥匙</a>
+              <a href="The_Trialmasters_Reliquary_Key">Wiki</a>
+            </div></td></tr>
+          </table></div>
+        </body></html>
+        """
+        client = FixtureClient({url: html})
+
+        names = await client._economy_page_names("碎片", "Economy_Fragments")
+
+        self.assertEqual(
+            names["thetrialmastersreliquarykey"],
+            ("试炼使者的圣物厅钥匙", "碎片"),
+        )
+
     async def test_exact_search_becomes_canonical_source(self):
         query_url = search_url("碎骨")
         client = FixtureClient(

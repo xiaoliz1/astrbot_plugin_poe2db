@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import datetime, timedelta
 
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
@@ -24,6 +25,7 @@ from .economy import (
 )
 from .poe2db import Poe2DBClient, Poe2DBError, Source, parse_multilingual_terms, search_url
 from .poecurrency import PoECurrencyClient, sort_national_snapshot
+from .price_schedule import BEIJING_TIMEZONE, next_price_refresh_at
 from .poe2search import (
     find_ambiguous_groups,
     format_disambiguation_prompt,
@@ -113,7 +115,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.7.5",
+    "1.8.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -126,6 +128,89 @@ class Poe2DBPlugin(Star):
         self.wiki = WikiClient(timeout, cache_minutes * 60)
         self.economy = NinjaEconomyClient(timeout)
         self.national_economy = PoECurrencyClient(timeout)
+        self._price_snapshots: dict[str, CurrencySnapshot] = {}
+        self._price_refresh_lock = asyncio.Lock()
+        self._price_refresh_task = asyncio.create_task(self._price_refresh_loop())
+
+    async def terminate(self) -> None:
+        """Stop the scheduled market refresh when AstrBot unloads the plugin."""
+        task = self._price_refresh_task
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    def _warn_price_refresh(self, source: str, error: object) -> None:
+        plugin_logger = getattr(self, "logger", None)
+        if plugin_logger and hasattr(plugin_logger, "warning"):
+            plugin_logger.warning(f"{source}物价表刷新失败，保留最近成功数据：{error}")
+
+    async def _refresh_price_tables(self) -> bool:
+        complete = True
+        async with self._price_refresh_lock:
+            try:
+                economy_names = await self.client.economy_names()
+            except Exception as exc:
+                self._warn_price_refresh("Poe2DB 名称", exc)
+                return False
+
+            international_result, national_result = await asyncio.gather(
+                self.economy.current_economy(force_refresh=True),
+                self.national_economy.current_divine_snapshot(economy_names),
+                return_exceptions=True,
+            )
+
+            if isinstance(international_result, CurrencySnapshot):
+                try:
+                    chinese_league = await self.client.chinese_league_name(
+                        international_result.league
+                    )
+                    localized = localize_currency_snapshot(
+                        international_result, economy_names, chinese_league
+                    )
+                    self._price_snapshots["international"] = localized
+                except Exception as exc:
+                    self._warn_price_refresh("国际服物价", exc)
+                    complete = False
+            else:
+                self._warn_price_refresh("国际服物价", international_result)
+                complete = False
+
+            if isinstance(national_result, CurrencySnapshot):
+                international = self._price_snapshots.get("international")
+                if international and international.rows:
+                    national_result = sort_national_snapshot(
+                        national_result, international.rows
+                    )
+                self._price_snapshots["national"] = national_result
+            else:
+                self._warn_price_refresh("国服物价", national_result)
+                complete = False
+
+        return complete
+
+    async def _price_refresh_loop(self) -> None:
+        while True:
+            complete = False
+            try:
+                complete = await self._refresh_price_tables()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._warn_price_refresh("物价", exc)
+
+            now = datetime.now(BEIJING_TIMEZONE)
+            next_refresh = next_price_refresh_at(now)
+            if not complete:
+                retry_at = now + timedelta(minutes=15)
+                next_refresh = min(next_refresh, retry_at)
+            delay_seconds = max(
+                1.0, (next_refresh - datetime.now(BEIJING_TIMEZONE)).total_seconds()
+            )
+            await asyncio.sleep(delay_seconds)
 
     @filter.command("poe2bd")
     async def poe2bd(self, event: AstrMessageEvent):
@@ -391,50 +476,18 @@ class Poe2DBPlugin(Star):
             yield event.plain_result("问题请控制在 300 字以内。")
             return
         if question in ("国际服物价", "國際服物價"):
-            economy_result, names_result = await asyncio.gather(
-                self.economy.current_currency(), self.client.currency_names(),
-                return_exceptions=True,
-            )
-            if isinstance(economy_result, Exception):
-                yield event.plain_result(
-                    "暂时无法获取当前赛季的通货物价，请稍后重试。"
-                    "资料页：https://poe.ninja/poe2/"
-                )
-                return
-            if isinstance(names_result, Exception):
-                yield event.plain_result("暂时无法读取通货的中文名称，请稍后重试。")
-                return
-            try:
-                league_name = await self.client.chinese_league_name(economy_result.league)
-            except Poe2DBError:
-                league_name = None
-            try:
-                snapshot = localize_currency_snapshot(economy_result, names_result, league_name)
-            except EconomyError:
-                yield event.plain_result("当前赛季的通货尚无可用的中文名称，请稍后重试。")
+            snapshot = self._price_snapshots.get("international")
+            if snapshot is None:
+                yield event.plain_result("物价表正在首次采集，请稍后重试。")
                 return
             yield await self._price_result(event, snapshot)
             return
 
         if question in ("国服物价", "國服物價"):
-            national_result, international_result = await asyncio.gather(
-                self.national_economy.current_currency(),
-                self.economy.current_currency(),
-                return_exceptions=True,
-            )
-            if isinstance(national_result, Exception):
-                yield event.plain_result(
-                    "暂时无法获取国服当前赛季物价，请稍后重试。"
-                    "数据页：https://poecurrency.top/"
-                )
+            snapshot = self._price_snapshots.get("national")
+            if snapshot is None:
+                yield event.plain_result("国服物价表正在首次采集，请稍后重试。")
                 return
-            if isinstance(international_result, Exception):
-                yield event.plain_result(
-                    "暂时无法读取国际服通货顺序，无法按国际服排名整理国服物价，请稍后重试。"
-                    "数据页：https://poe.ninja/poe2/"
-                )
-                return
-            snapshot = sort_national_snapshot(national_result, international_result.rows)
             yield await self._price_result(event, snapshot)
             return
 

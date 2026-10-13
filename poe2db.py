@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
 
-from .economy import currency_key
+from .economy import POE2DB_ECONOMY_PAGES, currency_key
 
 BASE_URLS = {
     "cn": "https://poe2db.tw/cn/",
@@ -21,7 +21,7 @@ BASE_URLS = {
 }
 PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.7.5 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.8.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 CURRENCY_PAGE = BASE_URLS["cn"] + "Currency_Exchange"
 LEAGUE_CN_PAGE = BASE_URLS["cn"] + "League"
 LEAGUE_US_PAGE = "https://poe2db.tw/us/League"
@@ -208,6 +208,89 @@ class Poe2DBClient:
                 names[currency_key(slug)] = name[:90]
         if not names:
             raise Poe2DBError("中文通货页面没有可用的物品名称")
+        return names
+
+    async def economy_names(self) -> dict[str, tuple[str, str]]:
+        """Collect Chinese item names and categories from all 14 economy pages.
+
+        English Wiki slugs on each row are used as live matching keys for
+        poe.ninja detailsId and poecurrency.top engname fields.
+        """
+        page_maps = await asyncio.gather(
+            *(
+                self._economy_page_names(category_label, page_slug)
+                for category_label, page_slug in POE2DB_ECONOMY_PAGES
+            )
+        )
+        names: dict[str, tuple[str, str]] = {}
+        for page_map in page_maps:
+            for key, value in page_map.items():
+                names.setdefault(key, value)
+        if not names:
+            raise Poe2DBError("14 个经济分类页面没有可用的物品名称")
+        return names
+
+    async def _economy_page_names(
+        self, category_label: str, page_slug: str
+    ) -> dict[str, tuple[str, str]]:
+        url = BASE_URLS["cn"] + page_slug
+        soup = BeautifulSoup(await self._fetch(url), "html.parser")
+        self._check_challenge(self._title(soup))
+        return self._parse_economy_page_names(soup, category_label)
+
+    @staticmethod
+    def _parse_economy_page_names(
+        soup: BeautifulSoup, category_label: str
+    ) -> dict[str, tuple[str, str]]:
+        root = soup.select_one(".page-content")
+        table = root.find("table") if root else None
+        if table is None:
+            raise Poe2DBError(f"Poe2DB 经济分类“{category_label}”缺少物品表")
+
+        names: dict[str, tuple[str, str]] = {}
+        for row in table.select("tr"):
+            cells = row.find_all("td", recursive=False)
+            if not cells:
+                continue
+            anchors = cells[0].find_all("a", href=True)
+            item_anchor = next(
+                (
+                    anchor
+                    for anchor in anchors
+                    if str(anchor.get("href", "")).startswith("Economy_")
+                ),
+                None,
+            )
+            if item_anchor is None:
+                continue
+            chinese_name = item_anchor.get_text(" ", strip=True)
+            if not re.search(r"[\u3400-\u9fff]", chinese_name):
+                continue
+            item_href = str(item_anchor.get("href", ""))
+            item_slug = item_href.removeprefix("Economy_")
+            if not re.fullmatch(r"[A-Za-z0-9_'-]{1,100}", item_slug):
+                continue
+
+            aliases = [item_slug]
+            wiki_anchor = next(
+                (
+                    anchor
+                    for anchor in anchors
+                    if anchor is not item_anchor
+                    and anchor.get_text(" ", strip=True).casefold() == "wiki"
+                ),
+                None,
+            )
+            if wiki_anchor is not None:
+                wiki_slug = str(wiki_anchor.get("href", ""))
+                if re.fullmatch(r"[A-Za-z0-9_'-]{1,100}", wiki_slug):
+                    aliases.insert(0, wiki_slug)
+
+            entry = (chinese_name[:90], category_label[:60])
+            for alias in aliases:
+                key = currency_key(alias)
+                if key:
+                    names.setdefault(key, entry)
         return names
 
     @staticmethod

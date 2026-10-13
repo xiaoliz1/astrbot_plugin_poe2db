@@ -9,8 +9,11 @@ from urllib.parse import parse_qs, urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_poe2db.economy import (
+    EXCHANGE_CATEGORIES,
     EconomyError,
     LEAGUES_URL,
+    CurrencyRow,
+    CurrencySnapshot,
     NinjaEconomyClient,
     localize_currency_snapshot,
     parse_currency_overview,
@@ -42,7 +45,7 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
                 self.league = "Forbidden Rites"
                 self.urls = []
 
-            async def _get_json(self, url, cache_seconds):
+            async def _get_json(self, url, cache_seconds, force_refresh=False):
                 self.urls.append(url)
                 if url.endswith("/leagues"):
                     return [{"id": self.league, "name": self.league}]
@@ -64,9 +67,57 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         allowed = NinjaEconomyClient._allowed
         self.assertTrue(allowed("https://poe.ninja/poe2/api/economy/leagues"))
         self.assertTrue(allowed("https://poe.ninja/poe2/api/economy/exchange/current/overview?league=Forbidden+Rites&type=Currency"))
+        self.assertTrue(allowed("https://poe.ninja/poe2/api/economy/exchange/current/overview?league=Forbidden+Rites&type=Fragments"))
+        self.assertTrue(allowed("https://poe.ninja/poe2/api/economy/exchange/current/overview?league=Forbidden+Rites&type=Verisium"))
         self.assertFalse(allowed("https://poe.ninja.evil.test/poe2/api/economy/leagues"))
         self.assertFalse(allowed("https://poe.ninja/poe1/api/economy/leagues"))
-        self.assertFalse(allowed("https://poe.ninja/poe2/api/economy/exchange/current/overview?league=Wrong&type=Fragments"))
+        self.assertFalse(allowed("https://poe.ninja/poe2/api/economy/exchange/current/overview?league=Wrong&type=NotAType"))
+
+    async def test_current_economy_merges_all_categories_in_divine_order(self):
+        class FixtureClient(NinjaEconomyClient):
+            def __init__(self):
+                super().__init__()
+                self.requests = []
+
+            async def _current_league(self, force_refresh=False):
+                return "Forbidden Rites", "Forbidden Rites"
+
+            async def _get_json(self, url, cache_seconds, force_refresh=False):
+                from urllib.parse import parse_qs, urlsplit
+
+                exchange_type = parse_qs(urlsplit(url).query)["type"][0]
+                self.requests.append((exchange_type, force_refresh))
+                index = next(
+                    i for i, category in enumerate(EXCHANGE_CATEGORIES)
+                    if category[0] == exchange_type
+                )
+                item_id = f"item-{exchange_type}"
+                return {
+                    "core": {
+                        "primary": "divine",
+                        "items": [{"id": "divine", "name": "Divine Orb"}],
+                    },
+                    "items": [{
+                        "id": item_id,
+                        "name": f"{exchange_type} item",
+                        "detailsId": f"{exchange_type.lower()}-item",
+                    }],
+                    "lines": [{"id": item_id, "primaryValue": index + 1}],
+                }
+
+        client = FixtureClient()
+        snapshot = await client.current_economy(force_refresh=True)
+        self.assertEqual(len(EXCHANGE_CATEGORIES), 14)
+        self.assertEqual(snapshot.total_count, 14)
+        self.assertEqual(len(client.requests), 14)
+        self.assertTrue(all(force for _, force in client.requests))
+        self.assertEqual(
+            [row.value for row in snapshot.rows],
+            sorted((row.value for row in snapshot.rows), reverse=True),
+        )
+        self.assertEqual(snapshot.rows[0].category, EXCHANGE_CATEGORIES[-1][1])
+        self.assertEqual(EXCHANGE_CATEGORIES[-1], ("Verisium", ""))
+        self.assertEqual(snapshot.reference, "Divine Orb")
 
     def test_empty_price_data_is_not_a_valid_snapshot(self):
         with self.assertRaises(EconomyError):
@@ -75,6 +126,28 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         malformed["core"]["items"] = 12
         with self.assertRaises(EconomyError):
             parse_currency_overview("Future Season", malformed)
+
+        non_divine = overview()
+        non_divine["core"] = {
+            "primary": "chaos",
+            "items": [{"id": "chaos", "name": "Chaos Orb"}],
+        }
+        with self.assertRaises(EconomyError):
+            parse_currency_overview("Future Season", non_divine, require_divine=True)
+
+    def test_empty_exchange_category_can_be_skipped_in_merged_snapshot(self):
+        payload = overview()
+        payload["items"] = []
+        payload["lines"] = []
+        snapshot = parse_currency_overview(
+            "Future Season",
+            payload,
+            category_label="雕像",
+            require_divine=True,
+            allow_empty=True,
+        )
+        self.assertEqual(snapshot.rows, ())
+        self.assertEqual(snapshot.total_count, 0)
 
     def test_invalid_utf8_response_becomes_a_source_error(self):
         class Response:
@@ -123,6 +196,46 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(term, markup)
         for term in ("Mirror of Kalandra", "Chaos Orb", "Divine Orb", "Forbidden Rites", "5.00k"):
             self.assertNotIn(term, markup)
+
+    def test_localizes_live_economy_names_and_categories(self):
+        payload = overview()
+        payload["items"][0]["detailsId"] = "mirror-of-kalandra"
+        snapshot = parse_currency_overview("Forbidden Rites", payload)
+        localized = localize_currency_snapshot(
+            snapshot,
+            {
+                "divineorb": ("神圣石", "通货"),
+                "mirrorofkalandra": ("卡兰德的魔镜", "通货"),
+                "chaosorb": ("混沌石", "通货"),
+            },
+            "禁断仪式",
+        )
+        self.assertEqual(localized.rows[0].name, "卡兰德的魔镜")
+        self.assertEqual(localized.rows[0].category, "通货")
+
+    def test_market_image_caps_at_50_rows_and_shows_category_column(self):
+        rows = tuple(
+            CurrencyRow(
+                name=f"物品{index}",
+                value=float(100 - index),
+                change_percent=None,
+                trend=(),
+                category="碎片",
+            )
+            for index in range(60)
+        )
+        markup = render_currency_html(
+            CurrencySnapshot(
+                league="测试赛季",
+                reference="神圣石",
+                rows=rows,
+                total_count=len(rows),
+                generated_at="2026-10-13 06:00",
+            )
+        )
+        self.assertEqual(markup.count('<td class="rank">'), 50)
+        self.assertIn("分类", markup)
+        self.assertIn("神圣石", markup)
 
 
 if __name__ == "__main__":

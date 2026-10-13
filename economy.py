@@ -1,4 +1,4 @@
-"""Current PoE2 currency overview from poe.ninja's public economy API."""
+"""PoE2 economy snapshots from poe.ninja's public economy API."""
 
 from __future__ import annotations
 
@@ -17,11 +17,53 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 LEAGUES_URL = "https://poe.ninja/poe2/api/economy/leagues"
 OVERVIEW_URL = "https://poe.ninja/poe2/api/economy/exchange/current/overview"
-USER_AGENT = "AstrBot-PoE2DB/1.7.5 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.8.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 2_000_000
 LEAGUES_CACHE_SECONDS = 300
 PRICES_CACHE_SECONDS = 1800
-IMAGE_ROWS = 24
+IMAGE_ROWS = 50
+
+# Poe2DB exposes 14 Chinese economy pages. These names are scraped separately
+# from the poe.ninja exchange types because the two sites' category lists do
+# not line up one-to-one (for example, poe.ninja's Verisium is not Atziri's
+# Temple). Item-level English slugs are the matching key.
+POE2DB_ECONOMY_PAGES = (
+    ("通货", "Economy_Currency"),
+    ("碎片", "Economy_Fragments"),
+    ("驱灵仪式", "Economy_Ritual"),
+    ("精华", "Economy_Essences"),
+    ("裂隙", "Economy_Breach"),
+    ("惊悸迷雾", "Economy_Delirium"),
+    ("先祖秘藏", "Economy_Expedition"),
+    ("符文", "Economy_Runes"),
+    ("灵核", "Economy_Soul_Cores"),
+    ("雕像", "Economy_Idols"),
+    ("未切割的宝石", "Economy_Uncut_Gems"),
+    ("深渊", "Economy_Abyss"),
+    ("宝石", "Economy_Gems"),
+    ("阿兹里神庙", "Economy_Atziris_Temple"),
+)
+
+# poe.ninja's supported PoE2 exchange API types. Verisium is queried as its
+# own type and is not assigned to a Poe2DB page category; when a returned item
+# has a Poe2DB English slug, localization supplies the correct page category.
+EXCHANGE_CATEGORIES = (
+    ("Currency", "通货"),
+    ("Fragments", "碎片"),
+    ("Ritual", "驱灵仪式"),
+    ("Essences", "精华"),
+    ("Breach", "裂隙"),
+    ("Delirium", "惊悸迷雾"),
+    ("Expedition", "先祖秘藏"),
+    ("Runes", "符文"),
+    ("SoulCores", "灵核"),
+    ("Idols", "雕像"),
+    ("UncutGems", "未切割的宝石"),
+    ("Abyss", "深渊"),
+    ("LineageSupportGems", "宝石"),
+    ("Verisium", ""),
+)
+EXCHANGE_TYPES = frozenset(category[0] for category in EXCHANGE_CATEGORIES)
 
 
 class EconomyError(RuntimeError):
@@ -38,6 +80,7 @@ class CurrencyRow:
     sell_change_percent: float | None = None
     unit_label: str | None = None
     sort_key: str = ""
+    category: str = ""
 
 
 @dataclass(frozen=True)
@@ -70,16 +113,34 @@ def currency_key(name: str) -> str:
 
 
 def localize_currency_snapshot(
-    snapshot: CurrencySnapshot, chinese_names: dict[str, str], chinese_league: str | None
+    snapshot: CurrencySnapshot,
+    chinese_names: dict[str, str | tuple[str, str]],
+    chinese_league: str | None,
 ) -> CurrencySnapshot:
-    reference = chinese_names.get(currency_key(snapshot.reference))
-    if not reference:
-        raise EconomyError("报价基准通货缺少中文名称")
-    rows = tuple(
-        replace(row, name=chinese_names[currency_key(row.name)][:90])
-        for row in snapshot.rows[:IMAGE_ROWS]
-        if chinese_names.get(currency_key(row.name))
+    reference_entry = chinese_names.get(currency_key(snapshot.reference))
+    reference = (
+        reference_entry[0]
+        if isinstance(reference_entry, tuple) and reference_entry
+        else reference_entry
     )
+    if not isinstance(reference, str) or not reference:
+        raise EconomyError("报价基准通货缺少中文名称")
+    localized_rows: list[CurrencyRow] = []
+    for row in snapshot.rows:
+        key = row.sort_key or currency_key(row.name)
+        entry = chinese_names.get(key) or chinese_names.get(currency_key(row.name))
+        if isinstance(entry, str):
+            name, category = entry, row.category
+        elif isinstance(entry, tuple) and entry:
+            name = entry[0]
+            category = entry[1] if len(entry) > 1 else row.category
+        else:
+            continue
+        if isinstance(name, str) and name:
+            localized_rows.append(
+                replace(row, name=name[:90], category=(category or row.category)[:60])
+            )
+    rows = tuple(localized_rows)
     if not rows:
         raise EconomyError("当前通货没有可用的中文名称")
     return replace(
@@ -87,6 +148,7 @@ def localize_currency_snapshot(
         league=(chinese_league or "当前赛季")[:100],
         reference=reference[:90],
         rows=rows,
+        total_count=len(rows),
     )
 
 
@@ -128,7 +190,8 @@ class NinjaEconomyClient:
             set(params) == {"league", "type"}
             and len(params["league"]) == 1
             and 0 < len(params["league"][0]) <= 100
-            and params["type"] == ["Currency"]
+            and len(params["type"]) == 1
+            and params["type"][0] in EXCHANGE_TYPES
         )
 
     def _download_sync(self, url: str) -> Any:
@@ -154,13 +217,15 @@ class NinjaEconomyClient:
         except (ValueError, UnicodeError) as exc:
             raise EconomyError("物价接口没有返回有效 JSON") from exc
 
-    async def _get_json(self, url: str, cache_seconds: int) -> Any:
+    async def _get_json(
+        self, url: str, cache_seconds: int, force_refresh: bool = False
+    ) -> Any:
         cached = self._cache.get(url)
-        if cached and cached[0] > time.monotonic():
+        if not force_refresh and cached and cached[0] > time.monotonic():
             return cached[1]
         async with self._lock:
             cached = self._cache.get(url)
-            if cached and cached[0] > time.monotonic():
+            if not force_refresh and cached and cached[0] > time.monotonic():
                 return cached[1]
             result = await asyncio.to_thread(self._download_sync, url)
             self._cache[url] = (time.monotonic() + cache_seconds, result)
@@ -168,19 +233,65 @@ class NinjaEconomyClient:
                 self._cache.pop(next(iter(self._cache)))
             return result
 
-    async def current_currency(self) -> CurrencySnapshot:
-        league_id, league_name = await self._current_league()
+    async def current_currency(self, force_refresh: bool = False) -> CurrencySnapshot:
+        league_id, league_name = await self._current_league(force_refresh)
         url = OVERVIEW_URL + "?" + urlencode({"league": league_id, "type": "Currency"})
-        overview = await self._get_json(url, PRICES_CACHE_SECONDS)
+        overview = await self._get_json(url, PRICES_CACHE_SECONDS, force_refresh)
         return parse_currency_overview(league_name, overview)
+
+    async def current_economy(self, force_refresh: bool = False) -> CurrencySnapshot:
+        """Fetch and merge the 14 exchange categories, quoted only in Divine Orbs."""
+        league_id, league_name = await self._current_league(force_refresh)
+        rows: list[CurrencyRow] = []
+        for exchange_type, category_label in EXCHANGE_CATEGORIES:
+            url = OVERVIEW_URL + "?" + urlencode(
+                {"league": league_id, "type": exchange_type}
+            )
+            overview = await self._get_json(
+                url, PRICES_CACHE_SECONDS, force_refresh=force_refresh
+            )
+            category_snapshot = parse_currency_overview(
+                league_name,
+                overview,
+                category_label=category_label,
+                require_divine=True,
+                allow_empty=True,
+            )
+            rows.extend(category_snapshot.rows)
+
+        # A source item may appear in more than one economy category. Keep one
+        # row per stable Poe2DB/Wiki slug, preferring its higher Divine quote.
+        unique_rows: dict[str, CurrencyRow] = {}
+        for row in rows:
+            key = row.sort_key or currency_key(row.name)
+            current = unique_rows.get(key)
+            if current is None or row.value > current.value:
+                unique_rows[key] = row
+        ordered_rows = tuple(
+            sorted(unique_rows.values(), key=lambda row: (-row.value, row.name))
+        )
+        if not ordered_rows:
+            raise EconomyError("14 个经济分类中没有神圣石报价")
+        return CurrencySnapshot(
+            league=league_name[:100],
+            reference="Divine Orb",
+            rows=ordered_rows,
+            total_count=len(ordered_rows),
+            generated_at=datetime.now(timezone(timedelta(hours=8))).strftime(
+                "%Y-%m-%d %H:%M"
+            ),
+            category_label="14 类经济物品",
+        )
 
     async def current_league_name(self) -> str:
         """Return the current challenge league name without fetching price data."""
         _, league_name = await self._current_league()
         return league_name
 
-    async def _current_league(self) -> tuple[str, str]:
-        leagues = await self._get_json(LEAGUES_URL, LEAGUES_CACHE_SECONDS)
+    async def _current_league(self, force_refresh: bool = False) -> tuple[str, str]:
+        leagues = await self._get_json(
+            LEAGUES_URL, LEAGUES_CACHE_SECONDS, force_refresh
+        )
         if not isinstance(leagues, list) or not leagues or not isinstance(leagues[0], dict):
             raise EconomyError("未取得当前赛季")
         current = leagues[0]
@@ -193,7 +304,13 @@ class NinjaEconomyClient:
         return league_id.strip(), league_name.strip()
 
 
-def parse_currency_overview(league: str, overview: object) -> CurrencySnapshot:
+def parse_currency_overview(
+    league: str,
+    overview: object,
+    category_label: str = "",
+    require_divine: bool = False,
+    allow_empty: bool = False,
+) -> CurrencySnapshot:
     if not isinstance(overview, dict):
         raise EconomyError("通货数据格式不正确")
     core = overview.get("core")
@@ -214,8 +331,10 @@ def parse_currency_overview(league: str, overview: object) -> CurrencySnapshot:
             if isinstance(candidate, str) and candidate:
                 reference = candidate
             break
+    if require_divine and currency_key(reference) not in {"divine", "divineorb"}:
+        raise EconomyError("此经济分类不是以神圣石报价")
     names = {
-        item["id"]: item["name"]
+        item["id"]: (item["name"], item.get("detailsId"))
         for item in items
         if isinstance(item, dict)
         and isinstance(item.get("id"), str)
@@ -242,16 +361,23 @@ def parse_currency_overview(league: str, overview: object) -> CurrencySnapshot:
             if isinstance(raw_trend, list)
             else ()
         )
+        item_name, details_id = names[line_id]
+        stable_key = (
+            currency_key(details_id)
+            if isinstance(details_id, str) and details_id
+            else currency_key(item_name)
+        )
         rows.append(
             CurrencyRow(
-                names[line_id][:90],
+                item_name[:90],
                 value,
                 change,
                 trend,
-                sort_key=currency_key(names[line_id]),
+                sort_key=stable_key,
+                category=category_label,
             )
         )
-    if not rows:
+    if not rows and not allow_empty:
         raise EconomyError("当前赛季没有可显示的通货价格")
     rows.sort(key=lambda row: (-row.value, row.name))
     generated_at = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
@@ -326,6 +452,7 @@ def render_currency_html(snapshot: CurrencySnapshot) -> str:
             rows.append(
                 "<tr>"
                 f'<td class="rank">{index:02d}</td>'
+                f'<td class="category">{_safe_html(row.category or snapshot.category_label)}</td>'
                 f'<td class="name">{_safe_html(row.name)}</td>'
                 f'<td class="metric">{buy_value}</td>'
                 f'<td class="metric">{sell_value}</td>'
@@ -337,6 +464,7 @@ def render_currency_html(snapshot: CurrencySnapshot) -> str:
             rows.append(
                 "<tr>"
                 f'<td class="rank">{index:02d}</td>'
+                f'<td class="category">{_safe_html(row.category or snapshot.category_label or "通货")}</td>'
                 f'<td class="name">{_safe_html(row.name)}</td>'
                 f'<td class="price">{_format_price(row.value)}</td>'
                 f'<td class="trend">{_trend_svg(row.trend, change is not None and change >= 0)}'
@@ -355,36 +483,38 @@ h1{font-size:30px;line-height:1.25;margin:8px 0 10px}.meta{color:#a9bac7;font-si
 table{width:100%;border-collapse:collapse;table-layout:fixed}th{color:#a9bac7;font-size:13px;
 font-weight:600;text-align:left;background:#223340;padding:10px 12px;border-bottom:2px solid #17c7a8}
 td{height:43px;padding:7px 12px;border-bottom:1px solid #2c3d4a;white-space:nowrap}
-tbody tr:nth-child(even){background:#1d2b37}.rank{width:58px;color:#7490a3}
-.name{width:51%;overflow:hidden;text-overflow:ellipsis;font-weight:600}
-.price{width:170px;color:#d3e9ff;font-variant-numeric:tabular-nums;font-weight:700}
-.national .name{width:38%}.national .metric{width:16%;color:#d3e9ff;font-weight:700}
-.national .delta{width:11%;text-align:right;font-variant-numeric:tabular-nums}
+tbody tr:nth-child(even){background:#1d2b37}.rank{width:48px;color:#7490a3}
+.category{width:128px;color:#9eb2c2;font-size:13px;overflow:hidden;text-overflow:ellipsis}
+.name{width:40%;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.price{width:160px;color:#d3e9ff;font-variant-numeric:tabular-nums;font-weight:700}
+.national .category{width:116px}.national .name{width:31%}
+.national .metric{width:14%;color:#d3e9ff;font-weight:700}
+.national .delta{width:9%;text-align:right;font-variant-numeric:tabular-nums}
 .trend{width:220px;display:flex;gap:12px;align-items:center;justify-content:flex-end;
 font-variant-numeric:tabular-nums}.trend span{min-width:65px;text-align:right}
 .up{color:#35d5a7}.down{color:#f77983}.flat,.empty{color:#9eb2c2}
 footer{display:flex;justify-content:space-between;gap:16px;color:#9eb2c2;font-size:12px;margin-top:18px}
 </style></head><body>
-""" + f'<main class="{card_class}"><div class="eyebrow">流放之路 2 · 通货行情</div>' + (
-        f"<h1>{'国服' if is_national else '国际服'}当前赛季通货物价</h1>"
+""" + f'<main class="{card_class}"><div class="eyebrow">流放之路 2 · 经济行情</div>' + (
+        f"<h1>{'国服' if is_national else '国际服'}神圣石物价表</h1>"
         + (
-            f'<div class="meta">{_safe_html(snapshot.category_label or "通货")} · '
-            "买入、卖出日均价；价格单位按每项标注</div>"
+            f'<div class="meta">{_safe_html(snapshot.category_label or "14 类经济物品")} · '
+            "只显示以神圣石计价的条目</div>"
             if is_national
             else f'<div class="meta">赛季 <span class="league">{league}</span> · '
-            f"价格单位：{reference} / 个</div>"
+            f"价格单位：{reference} / 个 · {_safe_html(snapshot.category_label or '14 类经济物品')}</div>"
         )
         + (
-            f'<p class="count">共有通货按国际服估价排序 · 国服独有项随后 · 显示 {len(display_rows)} / {snapshot.total_count} 种</p>'
+            f'<p class="count">按国际服排序 · 只显示神圣石报价 · 显示 {len(display_rows)} / {snapshot.total_count} 项</p>'
             if is_national
-            else f'<p class="count">按估价排序 · 显示 {len(display_rows)} / {snapshot.total_count} 种通货</p>'
+            else f'<p class="count">按神圣石估价降序 · 显示 {len(display_rows)} / {snapshot.total_count} 项</p>'
         )
         + (
-            '<table><thead><tr><th class="rank">#</th><th class="name">通货</th>'
-            '<th class="metric">买入均价</th><th class="metric">卖出均价</th>'
+            '<table><thead><tr><th class="rank">#</th><th class="category">分类</th><th class="name">物品</th>'
+            '<th class="metric">买入均价（神圣石）</th><th class="metric">卖出均价（神圣石）</th>'
             '<th class="delta">买入涨跌</th><th class="delta">卖出涨跌</th>'
             if is_national
-            else '<table><thead><tr><th class="rank">#</th><th class="name">通货</th>'
+            else '<table><thead><tr><th class="rank">#</th><th class="category">分类</th><th class="name">物品</th>'
             f'<th class="price">价格（{reference}）</th><th class="trend">7 天趋势</th>'
         )
         + "</tr></thead><tbody>"
@@ -392,11 +522,10 @@ footer{display:flex;justify-content:space-between;gap:16px;color:#9eb2c2;font-si
         + "</tbody></table>"
         + (
             f"<footer><span>数据来源：poecurrency.top 国服行情 · OCR 统计仅供参考</span>"
-            f"<span>行情时点：{_safe_html(snapshot.source_updated_at or '暂无')} · "
-            f"图片生成：{_safe_html(snapshot.generated_at)} 北京时间</span></footer>"
+            f"<span>源站时点：{_safe_html(snapshot.source_updated_at or '暂无')} · 表格更新：{_safe_html(snapshot.generated_at)} 北京时间</span></footer>"
             if is_national
-            else f"<footer><span>价格：poe.ninja · 中文名称：Poe2DB · 仅供参考</span>"
-            f"<span>图片生成：{_safe_html(snapshot.generated_at)} 北京时间 · 数据缓存最多 30 分钟</span></footer>"
+            else f"<footer><span>价格：poe.ninja · 名称与分类：Poe2DB · 仅供参考</span>"
+            f"<span>表格更新：{_safe_html(snapshot.generated_at)} 北京时间</span></footer>"
         )
         + "</main></body></html>"
     )
