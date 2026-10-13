@@ -1,4 +1,4 @@
-"""Configurable daily refresh schedule for PoE2 price tables."""
+"""Hourly PoE2 price collection and configurable notification schedules."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def next_price_refresh_at(
     times: object = DEFAULT_REFRESH_TIMES,
     utc_offset_hours: object = 8.0,
 ) -> datetime:
-    """Return the next configured refresh slot in the configured fixed offset."""
+    """Return the next configured notification slot in the configured offset."""
     target_timezone = timezone_for_utc_offset(utc_offset_hours)
     current = now or datetime.now(target_timezone)
     if current.tzinfo is None:
@@ -80,3 +80,16 @@ def next_price_refresh_at(
                 return candidate
 
     raise RuntimeError("无法计算下一个物价表刷新时间")
+
+
+def next_hourly_price_refresh_at(
+    now: datetime | None = None,
+    utc_offset_hours: object = 8.0,
+) -> datetime:
+    """Return the next top-of-hour price collection time in the configured offset."""
+    target_timezone = timezone_for_utc_offset(utc_offset_hours)
+    current = now or datetime.now(target_timezone)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=target_timezone)
+    current = current.astimezone(target_timezone)
+    return current.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)

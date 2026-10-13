@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_poe2db.price_schedule import (
     BEIJING_TIMEZONE,
+    next_hourly_price_refresh_at,
     next_price_refresh_at,
     normalize_utc_offset_hours,
     parse_daily_refresh_times,
@@ -17,7 +18,7 @@ from astrbot_plugin_poe2db.price_schedule import (
 
 
 class PriceScheduleTests(unittest.TestCase):
-    def test_refresh_slots_are_six_hours_apart_in_beijing_time(self):
+    def test_notification_slots_are_six_hours_apart_in_beijing_time(self):
         current = datetime(2026, 10, 13, 5, 59, tzinfo=BEIJING_TIMEZONE)
         self.assertEqual(
             next_price_refresh_at(current),
@@ -66,6 +67,21 @@ class PriceScheduleTests(unittest.TestCase):
         )
         expected = datetime(
             2026, 10, 13, 12, 0, tzinfo=timezone_for_utc_offset(5.5)
+        )
+        self.assertEqual(result, expected)
+
+    def test_hourly_collection_runs_at_the_next_local_hour(self):
+        current = datetime(2026, 10, 13, 12, 37, 45, tzinfo=BEIJING_TIMEZONE)
+        self.assertEqual(
+            next_hourly_price_refresh_at(current),
+            datetime(2026, 10, 13, 13, 0, tzinfo=BEIJING_TIMEZONE),
+        )
+
+    def test_hourly_collection_supports_half_hour_utc_offsets(self):
+        current = datetime(2026, 10, 13, 5, 0, tzinfo=timezone.utc)
+        result = next_hourly_price_refresh_at(current, 5.5)
+        expected = datetime(
+            2026, 10, 13, 11, 0, tzinfo=timezone_for_utc_offset(5.5)
         )
         self.assertEqual(result, expected)
 

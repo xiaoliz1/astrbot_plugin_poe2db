@@ -31,6 +31,7 @@ from .price_notifications import (
     select_notification_targets,
 )
 from .price_schedule import (
+    next_hourly_price_refresh_at,
     next_price_refresh_at,
     normalize_utc_offset_hours,
     parse_daily_refresh_times,
@@ -125,7 +126,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.10.0",
+    "1.11.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -139,6 +140,7 @@ class Poe2DBPlugin(Star):
         self.economy = NinjaEconomyClient(timeout)
         self.national_economy = PoECurrencyClient(timeout)
         self._price_snapshots: dict[str, CurrencySnapshot] = {}
+        self._price_images: dict[str, str] = {}
         self._national_chinese_names: dict[str, str] = {"divineorb": "神圣石"}
         self._pending_price_requests: set[tuple[str, str]] = set()
         self._known_group_umos: set[str] = set()
@@ -163,6 +165,7 @@ class Poe2DBPlugin(Star):
 
     async def _refresh_price_tables(self) -> bool:
         complete = True
+        updated_markets: list[str] = []
         async with self._price_refresh_lock:
             international_result, national_data = await asyncio.gather(
                 self.economy.current_economy(force_refresh=True),
@@ -188,6 +191,7 @@ class Poe2DBPlugin(Star):
                         international_result, self._national_chinese_names, None
                     )
                     self._price_snapshots["international"] = localized
+                    updated_markets.append("international")
                 except Exception as exc:
                     self._warn_price_refresh("国际服物价", exc)
                     complete = False
@@ -202,6 +206,22 @@ class Poe2DBPlugin(Star):
                         national_result, international.rows
                     )
                 self._price_snapshots["national"] = national_result
+                updated_markets.append("national")
+
+            if updated_markets:
+                render_results = await asyncio.gather(
+                    *(
+                        self._render_price_image(self._price_snapshots[market])
+                        for market in updated_markets
+                    ),
+                    return_exceptions=True,
+                )
+                for market, image_path in zip(updated_markets, render_results):
+                    if isinstance(image_path, str) and image_path:
+                        self._price_images[market] = image_path
+                    else:
+                        self._warn_price_refresh(f"{market}物价图片生成", image_path)
+                        complete = False
 
         return complete
 
@@ -229,35 +249,43 @@ class Poe2DBPlugin(Star):
             )
             schedule_timezone = timezone_for_utc_offset(offset_hours)
             now = datetime.now(schedule_timezone)
-            next_refresh = next_price_refresh_at(
+            next_notification = next_price_refresh_at(
                 now, refresh_times, offset_hours
             )
-            run_at = next_refresh
-            is_scheduled_refresh = True
+            next_collection = next_hourly_price_refresh_at(now, offset_hours)
+            events = [
+                (next_notification, "notification"),
+                (next_collection, "collection"),
+            ]
             if not complete:
-                retry_at = now + timedelta(minutes=15)
-                if retry_at < next_refresh:
-                    run_at = retry_at
-                    is_scheduled_refresh = False
+                events.append((now + timedelta(minutes=15), "retry"))
+            run_at = min(event_time for event_time, _ in events)
             delay_seconds = max(
                 1.0, (run_at - datetime.now(schedule_timezone)).total_seconds()
             )
             await asyncio.sleep(delay_seconds)
 
-            if is_scheduled_refresh:
+            due_events = {
+                event_name
+                for event_time, event_name in events
+                if event_time == run_at
+            }
+            if "notification" in due_events:
                 notify_after_success = True
-            try:
-                complete = await self._refresh_price_tables()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self._warn_price_refresh("物价", exc)
-                complete = False
 
-            try:
-                await self._notify_pending_price_requests()
-            except Exception as exc:
-                self._warn_price_refresh("物价查询回告", exc)
+            if due_events & {"collection", "retry"}:
+                try:
+                    complete = await self._refresh_price_tables()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._warn_price_refresh("物价", exc)
+                    complete = False
+
+                try:
+                    await self._notify_pending_price_requests()
+                except Exception as exc:
+                    self._warn_price_refresh("物价查询回告", exc)
 
             if complete and notify_after_success:
                 try:
@@ -317,16 +345,11 @@ class Poe2DBPlugin(Star):
 
     async def _notify_pending_price_requests(self) -> None:
         ready = ready_price_requests(
-            self._pending_price_requests, set(self._price_snapshots)
+            self._pending_price_requests, set(self._price_images)
         )
-        image_paths: dict[str, str | None] = {}
         labels = {"international": "国际服", "national": "国服"}
         for umo, market in ready:
-            if market not in image_paths:
-                image_paths[market] = await self._render_price_image(
-                    self._price_snapshots[market]
-                )
-            image_path = image_paths[market]
+            image_path = self._price_images.get(market)
             if not image_path:
                 continue
             try:
@@ -357,16 +380,10 @@ class Poe2DBPlugin(Star):
             )
             return
 
-        international = self._price_snapshots.get("international")
-        national = self._price_snapshots.get("national")
-        if international is None or national is None:
-            self._warn_price_refresh("物价通知", "两服价格表未同时准备完成")
-            return
-
-        international_image = await self._render_price_image(international)
-        national_image = await self._render_price_image(national)
+        international_image = self._price_images.get("international")
+        national_image = self._price_images.get("national")
         if not international_image or not national_image:
-            self._warn_price_refresh("物价通知", "价格图片生成失败，未发送本次通知")
+            self._warn_price_refresh("物价通知", "两服价格图片尚未准备完成")
             return
 
         for destination in destinations:
@@ -449,12 +466,16 @@ class Poe2DBPlugin(Star):
         if image_url:
             yield event.image_result(image_url)
 
-    async def _price_result(
-        self, event: AstrMessageEvent, snapshot: CurrencySnapshot
-    ):
-        image_path = await self._render_price_image(snapshot)
+    async def _price_result(self, event: AstrMessageEvent, market: str):
+        image_path = self._price_images.get(market)
         if not image_path:
-            return event.plain_result("物价已获取，但图片生成失败。请检查 AstrBot 的 HTML 渲染服务。")
+            self._pending_price_requests.add(
+                (str(event.unified_msg_origin), market)
+            )
+            labels = {"international": "国际服", "national": "国服"}
+            return event.plain_result(
+                f"{labels[market]}物价图片暂未准备好；后台每小时采集并生成图片，准备完成后会自动发送。"
+            )
         return event.image_result(image_path)
 
     async def _answer_from_sources(
@@ -648,29 +669,27 @@ class Poe2DBPlugin(Star):
             yield event.plain_result("问题请控制在 300 字以内。")
             return
         if question in ("国际服物价", "國際服物價"):
-            snapshot = self._price_snapshots.get("international")
-            if snapshot is None:
+            if not self._price_images.get("international"):
                 self._pending_price_requests.add(
                     (str(event.unified_msg_origin), "international")
                 )
                 yield event.plain_result(
-                    "国际服物价正在采集，采集完成后会自动发送图片。"
+                    "国际服物价图片暂未准备好；后台每小时采集并生成图片，准备完成后会自动发送。"
                 )
                 return
-            yield await self._price_result(event, snapshot)
+            yield await self._price_result(event, "international")
             return
 
         if question in ("国服物价", "國服物價"):
-            snapshot = self._price_snapshots.get("national")
-            if snapshot is None:
+            if not self._price_images.get("national"):
                 self._pending_price_requests.add(
                     (str(event.unified_msg_origin), "national")
                 )
                 yield event.plain_result(
-                    "国服物价正在采集，采集完成后会自动发送图片。"
+                    "国服物价图片暂未准备好；后台每小时采集并生成图片，准备完成后会自动发送。"
                 )
                 return
-            yield await self._price_result(event, snapshot)
+            yield await self._price_result(event, "national")
             return
 
         try:
