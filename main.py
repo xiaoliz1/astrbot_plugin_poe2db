@@ -19,6 +19,7 @@ from .economy import (
 )
 from .poe2db import Poe2DBClient, Poe2DBError, Source, parse_multilingual_terms, search_url
 from .poecurrency import PoECurrencyClient, sort_national_snapshot
+from .poe2search import format_search_results, merge_search_sources
 from .wiki import WikiClient, WikiSourceError, wiki_names_from_poe2db
 
 
@@ -41,11 +42,17 @@ def _character_name_from_message(message: str) -> str:
     return text[match.end() :].strip() if match else text
 
 
+def _search_query_from_message(message: str) -> str:
+    text = message.strip()
+    match = re.match(r"(?i)^\s*\S*?poe2search(?:\s+|$)", text)
+    return text[match.end() :].strip() if match else text
+
+
 @register(
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.7.1",
+    "1.7.2",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -76,6 +83,44 @@ class Poe2DBPlugin(Star):
             yield event.plain_result(str(exc))
             return
         yield event.plain_result(url)
+
+    @filter.command("poe2search")
+    async def poe2search(self, event: AstrMessageEvent):
+        query = _search_query_from_message(event.message_str)
+        if not query:
+            yield event.plain_result("用法：/poe2search 词条名称，例如 /poe2search 魔血")
+            return
+        if len(query) > 80:
+            yield event.plain_result("搜索词请控制在 80 字以内。")
+            return
+
+        max_sources = _bounded_int(self.config.get("max_sources"), 5, 1, 8)
+        poe_result, wiki_result = await asyncio.gather(
+            self.client.find_sources([query], max_sources=max_sources, max_chars=900),
+            self.wiki.find_wiki([query], max_sources=max_sources, max_chars=900),
+            return_exceptions=True,
+        )
+        poe_sources = poe_result if isinstance(poe_result, list) else []
+        wiki_sources = wiki_result if isinstance(wiki_result, list) else []
+        if not wiki_sources and poe_sources:
+            wiki_names = wiki_names_from_poe2db(poe_sources)
+            if wiki_names:
+                try:
+                    wiki_sources = await self.wiki.find_wiki(
+                        wiki_names, max_sources=max_sources, max_chars=900
+                    )
+                except WikiSourceError:
+                    pass
+
+        sources = merge_search_sources(query, poe_sources, wiki_sources, max_sources)
+        if (
+            not sources
+            and isinstance(poe_result, Exception)
+            and isinstance(wiki_result, Exception)
+        ):
+            yield event.plain_result("Poe2DB 和 PoE2Wiki 暂时无法读取，请稍后重试。")
+            return
+        yield event.plain_result(format_search_results(query, sources, max_sources))
 
     async def _price_result(
         self, event: AstrMessageEvent, snapshot: CurrencySnapshot

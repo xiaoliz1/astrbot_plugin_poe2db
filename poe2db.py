@@ -21,7 +21,7 @@ BASE_URLS = {
 }
 PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.5 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.7.2 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 CURRENCY_PAGE = BASE_URLS["cn"] + "Currency_Exchange"
 LEAGUE_CN_PAGE = BASE_URLS["cn"] + "League"
 LEAGUE_US_PAGE = "https://poe2db.tw/us/League"

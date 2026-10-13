@@ -1,8 +1,8 @@
 {
   "max_sources": {
     "type": "int",
-    "description": "每次回答最多引用的资料页数",
-    "hint": "范围 1–8。默认 5 个；可同时引用 Poe2DB 和英文 Wiki。若设为 1，每次只显示一条来源。",
+    "description": "问答和词条搜索最多显示的资料页数",
+    "hint": "范围 1–8。默认 5 个；可同时显示 Poe2DB 和英文 Wiki。若设为 1，每次只显示一条来源。",
     "default": 5
   },
   "timeout_seconds": {
