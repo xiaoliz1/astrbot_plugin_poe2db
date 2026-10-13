@@ -17,16 +17,13 @@ git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 
 ## 使用
 
-```text
+```bash
 /poe2 碎骨有什么效果？
-/poe2 冰霜新星是什么技能？
-/poe2 魔血的词缀是什么？
-/poe2 Fireball 需要什么条件？
-/poe2search 魔血
-/poe2search 冰霜新星
-/poe2bd 九球天后莉莉丝
+/poe2 Mageblood 的词缀是什么？
+/poe2 元素专注辅助宝石有什么作用？
 /poe2 国际服物价
 /poe2 国服物价
+/poe2bd 角色名
 ```
 
 插件让当前模型提取最多两个主题的简体、繁体和英文名称。若只提取到中文，但 Poe2DB 命中的词条地址含英文名称，插件会用该名称补查 Wiki。仅对实际匹配到的词条提供答案，不会把搜索结果中只提到关键词的无关页面当作证据。若页面没有说明掉落方式等细节，回答会明确说明无法确认。
