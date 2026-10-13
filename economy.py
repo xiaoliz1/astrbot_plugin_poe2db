@@ -17,7 +17,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 LEAGUES_URL = "https://poe.ninja/poe2/api/economy/leagues"
 OVERVIEW_URL = "https://poe.ninja/poe2/api/economy/exchange/current/overview"
-USER_AGENT = "AstrBot-PoE2DB/1.4 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.5 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 2_000_000
 LEAGUES_CACHE_SECONDS = 300
 PRICES_CACHE_SECONDS = 1800
@@ -34,6 +34,9 @@ class CurrencyRow:
     value: float
     change_percent: float | None
     trend: tuple[float, ...]
+    sell_value: float | None = None
+    sell_change_percent: float | None = None
+    unit_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,9 @@ class CurrencySnapshot:
     rows: tuple[CurrencyRow, ...]
     total_count: int
     generated_at: str
+    market: str = "国际服"
+    category_label: str = ""
+    source_updated_at: str | None = None
 
 
 def _finite_number(value: object) -> float | None:
@@ -274,6 +280,8 @@ def _trend_svg(values: tuple[float, ...], positive: bool) -> str:
 
 def render_currency_html(snapshot: CurrencySnapshot) -> str:
     """Build a self-contained image layout; data never becomes active markup."""
+    is_national = snapshot.market == "国服"
+    card_class = "card national" if is_national else "card"
     league = _safe_html(snapshot.league)
     reference = _safe_html(snapshot.reference)
     rows: list[str] = []
@@ -281,15 +289,41 @@ def render_currency_html(snapshot: CurrencySnapshot) -> str:
         change = row.change_percent
         change_text = "—" if change is None else f"{change:+.1f}%"
         change_class = "flat" if change is None else ("up" if change >= 0 else "down")
-        rows.append(
-            "<tr>"
-            f'<td class="rank">{index:02d}</td>'
-            f'<td class="name">{_safe_html(row.name)}</td>'
-            f'<td class="price">{_format_price(row.value)}</td>'
-            f'<td class="trend">{_trend_svg(row.trend, change is not None and change >= 0)}'
-            f'<span class="{change_class}">{change_text}</span></td>'
-            "</tr>"
-        )
+        if is_national:
+            sell_value = (
+                "暂无"
+                if row.sell_value is None or row.sell_value <= 0
+                else _format_price(row.sell_value)
+            )
+            if row.sell_value is not None and row.unit_label:
+                if row.sell_value > 0:
+                    sell_value += " " + _safe_html(row.unit_label)
+            buy_value = _format_price(row.value) if row.value > 0 else "暂无"
+            if row.unit_label:
+                buy_value += " " + _safe_html(row.unit_label)
+            sell_change = row.sell_change_percent
+            sell_change_text = "—" if sell_change is None else f"{sell_change:+.1f}%"
+            sell_class = "flat" if sell_change is None else ("up" if sell_change >= 0 else "down")
+            rows.append(
+                "<tr>"
+                f'<td class="rank">{index:02d}</td>'
+                f'<td class="name">{_safe_html(row.name)}</td>'
+                f'<td class="metric">{buy_value}</td>'
+                f'<td class="metric">{sell_value}</td>'
+                f'<td class="delta {change_class}">{change_text}</td>'
+                f'<td class="delta {sell_class}">{sell_change_text}</td>'
+                "</tr>"
+            )
+        else:
+            rows.append(
+                "<tr>"
+                f'<td class="rank">{index:02d}</td>'
+                f'<td class="name">{_safe_html(row.name)}</td>'
+                f'<td class="price">{_format_price(row.value)}</td>'
+                f'<td class="trend">{_trend_svg(row.trend, change is not None and change >= 0)}'
+                f'<span class="{change_class}">{change_text}</span></td>'
+                "</tr>"
+            )
     return """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <style>
 *{box-sizing:border-box}body{margin:0;padding:28px;background:#0d1520;color:#eaf3fb;
@@ -305,20 +339,45 @@ td{height:43px;padding:7px 12px;border-bottom:1px solid #2c3d4a;white-space:nowr
 tbody tr:nth-child(even){background:#1d2b37}.rank{width:58px;color:#7490a3}
 .name{width:51%;overflow:hidden;text-overflow:ellipsis;font-weight:600}
 .price{width:170px;color:#d3e9ff;font-variant-numeric:tabular-nums;font-weight:700}
+.national .name{width:38%}.national .metric{width:16%;color:#d3e9ff;font-weight:700}
+.national .delta{width:11%;text-align:right;font-variant-numeric:tabular-nums}
 .trend{width:220px;display:flex;gap:12px;align-items:center;justify-content:flex-end;
 font-variant-numeric:tabular-nums}.trend span{min-width:65px;text-align:right}
 .up{color:#35d5a7}.down{color:#f77983}.flat,.empty{color:#9eb2c2}
 footer{display:flex;justify-content:space-between;gap:16px;color:#9eb2c2;font-size:12px;margin-top:18px}
-</style></head><body><main class="card"><div class="eyebrow">流放之路 2 · 通货行情</div>
-""" + (
-        f"<h1>当前赛季通货物价</h1>"
-        f'<div class="meta">赛季 <span class="league">{league}</span> · '
-        f"价格单位：{reference} / 个</div>"
-        f'<p class="count">按估价排序 · 显示 {len(snapshot.rows)} / {snapshot.total_count} 种通货</p>'
-        '<table><thead><tr><th class="rank">#</th><th class="name">通货</th>'
-        f'<th class="price">价格（{reference}）</th><th class="trend">7 天趋势</th>'
-        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
-        f"<footer><span>价格：poe.ninja · 中文名称：Poe2DB · 仅供参考</span>"
-        f"<span>图片生成：{_safe_html(snapshot.generated_at)} 北京时间 · 数据缓存最多 30 分钟</span></footer>"
-        "</main></body></html>"
+</style></head><body>
+""" + f'<main class="{card_class}"><div class="eyebrow">流放之路 2 · 通货行情</div>' + (
+        f"<h1>{'国服' if is_national else '国际服'}当前赛季通货物价</h1>"
+        + (
+            f'<div class="meta">{_safe_html(snapshot.category_label or "通货")} · '
+            "买入、卖出日均价；价格单位按每项标注</div>"
+            if is_national
+            else f'<div class="meta">赛季 <span class="league">{league}</span> · '
+            f"价格单位：{reference} / 个</div>"
+        )
+        + (
+            f'<p class="count">显示 {len(snapshot.rows)} / {snapshot.total_count} 种通货</p>'
+            if is_national
+            else f'<p class="count">按估价排序 · 显示 {len(snapshot.rows)} / {snapshot.total_count} 种通货</p>'
+        )
+        + (
+            '<table><thead><tr><th class="rank">#</th><th class="name">通货</th>'
+            '<th class="metric">买入均价</th><th class="metric">卖出均价</th>'
+            '<th class="delta">买入涨跌</th><th class="delta">卖出涨跌</th>'
+            if is_national
+            else '<table><thead><tr><th class="rank">#</th><th class="name">通货</th>'
+            f'<th class="price">价格（{reference}）</th><th class="trend">7 天趋势</th>'
+        )
+        + "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table>"
+        + (
+            f"<footer><span>数据来源：poecurrency.top 国服行情 · OCR 统计仅供参考</span>"
+            f"<span>行情时点：{_safe_html(snapshot.source_updated_at or '暂无')} · "
+            f"图片生成：{_safe_html(snapshot.generated_at)} 北京时间</span></footer>"
+            if is_national
+            else f"<footer><span>价格：poe.ninja · 中文名称：Poe2DB · 仅供参考</span>"
+            f"<span>图片生成：{_safe_html(snapshot.generated_at)} 北京时间 · 数据缓存最多 30 分钟</span></footer>"
+        )
+        + "</main></body></html>"
     )

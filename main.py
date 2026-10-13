@@ -10,12 +10,14 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 from .economy import (
+    CurrencySnapshot,
     EconomyError,
     NinjaEconomyClient,
     localize_currency_snapshot,
     render_currency_html,
 )
 from .poe2db import Poe2DBClient, Poe2DBError, Source, parse_multilingual_terms, search_url
+from .poecurrency import PoECurrencyClient
 from .wiki import WikiClient, WikiSourceError, wiki_names_from_poe2db
 
 
@@ -36,7 +38,7 @@ def _question_from_message(message: str) -> str:
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.4.0",
+    "1.5.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -48,17 +50,35 @@ class Poe2DBPlugin(Star):
         self.client = Poe2DBClient(timeout, cache_minutes * 60)
         self.wiki = WikiClient(timeout, cache_minutes * 60)
         self.economy = NinjaEconomyClient(timeout)
+        self.national_economy = PoECurrencyClient(timeout)
+
+    async def _price_result(
+        self, event: AstrMessageEvent, snapshot: CurrencySnapshot
+    ):
+        try:
+            image_path = await self.html_render(
+                render_currency_html(snapshot),
+                data={},
+                options={"type": "png", "full_page": True},
+            )
+        except Exception:
+            return event.plain_result("物价已获取，但图片生成失败。请检查 AstrBot 的 HTML 渲染服务。")
+        if not image_path:
+            return event.plain_result("物价已获取，但图片生成失败。请检查 AstrBot 的 HTML 渲染服务。")
+        return event.image_result(image_path)
 
     @filter.command("poe2")
     async def poe2(self, event: AstrMessageEvent):
         question = _question_from_message(event.message_str)
         if not question:
-            yield event.plain_result("用法：/poe2 碎骨有什么效果？ 或 /poe2 物价")
+            yield event.plain_result(
+                "用法：/poe2 碎骨有什么效果？、/poe2 国际服物价 或 /poe2 国服物价"
+            )
             return
         if len(question) > 300:
             yield event.plain_result("问题请控制在 300 字以内。")
             return
-        if question in ("物价", "物價"):
+        if question in ("国际服物价", "國際服物價"):
             economy_result, names_result = await asyncio.gather(
                 self.economy.current_currency(), self.client.currency_names(),
                 return_exceptions=True,
@@ -81,19 +101,19 @@ class Poe2DBPlugin(Star):
             except EconomyError:
                 yield event.plain_result("当前赛季的通货尚无可用的中文名称，请稍后重试。")
                 return
+            yield await self._price_result(event, snapshot)
+            return
+
+        if question in ("国服物价", "國服物價"):
             try:
-                image_path = await self.html_render(
-                    render_currency_html(snapshot),
-                    data={},
-                    options={"type": "png", "full_page": True},
+                snapshot = await self.national_economy.current_currency()
+            except EconomyError:
+                yield event.plain_result(
+                    "暂时无法获取国服当前赛季物价，请稍后重试。"
+                    "数据页：https://poecurrency.top/"
                 )
-            except Exception:
-                yield event.plain_result("物价已获取，但图片生成失败。请检查 AstrBot 的 HTML 渲染服务。")
                 return
-            if not image_path:
-                yield event.plain_result("物价已获取，但图片生成失败。请检查 AstrBot 的 HTML 渲染服务。")
-                return
-            yield event.image_result(image_path)
+            yield await self._price_result(event, snapshot)
             return
 
         try:
