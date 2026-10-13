@@ -9,7 +9,7 @@ from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .builds import character_search_url
+from .builds import character_search_page_url
 from .economy import (
     CurrencySnapshot,
     EconomyError,
@@ -35,7 +35,7 @@ def _question_from_message(message: str) -> str:
     return text[match.end() :].strip() if match else text
 
 
-def _character_from_message(message: str) -> str:
+def _character_name_from_message(message: str) -> str:
     text = message.strip()
     match = re.match(r"(?i)^\s*\S*?poe2bd(?:\s+|$)", text)
     return text[match.end() :].strip() if match else text
@@ -45,7 +45,7 @@ def _character_from_message(message: str) -> str:
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.7.0",
+    "1.7.1",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -61,15 +61,19 @@ class Poe2DBPlugin(Star):
 
     @filter.command("poe2bd")
     async def poe2bd(self, event: AstrMessageEvent):
-        character_id = _character_from_message(event.message_str)
-        if not character_id:
-            yield event.plain_result("用法：/poe2bd 游戏角色名或 ID")
+        character_name = _character_name_from_message(event.message_str)
+        if not character_name:
+            yield event.plain_result("用法：/poe2bd 游戏角色名")
             return
         try:
             league_name = await self.economy.current_league_name()
-            url = character_search_url(character_id, league_name)
-        except (EconomyError, ValueError):
+        except EconomyError:
             yield event.plain_result("暂时无法确认 poe.ninja 当前赛季，无法生成角色搜索链接，请稍后重试。")
+            return
+        try:
+            url = character_search_page_url(character_name, league_name)
+        except ValueError as exc:
+            yield event.plain_result(str(exc))
             return
         yield event.plain_result(url)
 
