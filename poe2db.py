@@ -13,13 +13,18 @@ from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
 
+from .economy import currency_key
+
 BASE_URLS = {
     "cn": "https://poe2db.tw/cn/",
     "tw": "https://poe2db.tw/tw/",
 }
 PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.3 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.4 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+CURRENCY_PAGE = BASE_URLS["cn"] + "Currency_Exchange"
+LEAGUE_CN_PAGE = BASE_URLS["cn"] + "League"
+LEAGUE_US_PAGE = "https://poe2db.tw/us/League"
 
 
 class Poe2DBError(RuntimeError):
@@ -127,7 +132,10 @@ class Poe2DBClient:
             and parts.hostname == "poe2db.tw"
             and parts.port is None
             and parts.username is None
-            and any(parts.path.startswith(f"/{locale}/") for locale in BASE_URLS)
+            and (
+                any(parts.path.startswith(f"/{locale}/") for locale in BASE_URLS)
+                or parts.path == "/us/League"
+            )
         )
 
     def _download_sync(self, url: str) -> tuple[str, str]:
@@ -178,6 +186,63 @@ class Poe2DBClient:
     def _check_challenge(title: str) -> None:
         if title.casefold() in {"just a moment...", "attention required!"}:
             raise Poe2DBError("资料站点要求浏览器验证，暂时无法自动读取")
+
+    async def currency_names(self) -> dict[str, str]:
+        """Read current Simplified Chinese names from one Poe2DB currency page."""
+        soup = BeautifulSoup(await self._fetch(CURRENCY_PAGE), "html.parser")
+        self._check_challenge(self._title(soup))
+        root = soup.select_one(".page-content")
+        if root is None:
+            raise Poe2DBError("中文通货页面缺少正文")
+        names: dict[str, str] = {}
+        # Some BeautifulSoup versions mishandle CSS class+attribute selectors.
+        for anchor in root.find_all("a", class_="item_currency"):
+            slug = anchor.get("href")
+            name = anchor.get_text(" ", strip=True)
+            if (
+                isinstance(slug, str)
+                and re.fullmatch(r"[A-Za-z0-9_'-]{1,100}", slug)
+                and re.search(r"[\u3400-\u9fff]", name)
+            ):
+                names[currency_key(slug)] = name[:90]
+        if not names:
+            raise Poe2DBError("中文通货页面没有可用的物品名称")
+        return names
+
+    @staticmethod
+    def _league_rows(soup: BeautifulSoup) -> dict[str, str]:
+        rows: dict[str, str] = {}
+        root = soup.select_one(".page-content") or soup
+        for row in root.find_all("tr"):
+            cells = row.find_all("td", recursive=False)
+            if len(cells) < 2:
+                continue
+            version = cells[0].get_text(" ", strip=True)
+            name = cells[1].get_text(" ", strip=True)
+            if re.fullmatch(r"\d+(?:\.\d+){0,3}", version) and name:
+                rows[version] = name
+        return rows
+
+    async def chinese_league_name(self, english_name: str) -> str | None:
+        """Match the live English and Chinese league lists by game version."""
+        if not english_name or len(english_name) > 100:
+            return None
+        cn_html, us_html = await asyncio.gather(
+            self._fetch(LEAGUE_CN_PAGE), self._fetch(LEAGUE_US_PAGE)
+        )
+        cn_soup = BeautifulSoup(cn_html, "html.parser")
+        us_soup = BeautifulSoup(us_html, "html.parser")
+        self._check_challenge(self._title(cn_soup))
+        self._check_challenge(self._title(us_soup))
+        english = self._league_rows(us_soup)
+        chinese = self._league_rows(cn_soup)
+        for version, name in english.items():
+            translated = chinese.get(version)
+            if name.casefold() == english_name.casefold() and translated and re.search(
+                r"[\u3400-\u9fff]", translated
+            ):
+                return translated[:100]
+        return None
 
     @classmethod
     def _clean_url(cls, base: str, href: str) -> str | None:

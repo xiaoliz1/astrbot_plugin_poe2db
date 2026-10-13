@@ -4,9 +4,17 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from poe2db import Poe2DBClient, Poe2DBError, parse_query_terms, search_url
+from astrbot_plugin_poe2db.poe2db import (
+    CURRENCY_PAGE,
+    LEAGUE_CN_PAGE,
+    LEAGUE_US_PAGE,
+    Poe2DBClient,
+    Poe2DBError,
+    parse_query_terms,
+    search_url,
+)
 
 
 class FixtureClient(Poe2DBClient):
@@ -161,6 +169,32 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(Poe2DBClient._allowed("https://example.com/tw/Boneshatter"))
         with self.assertRaises(ValueError):
             search_url("碎骨", "en")
+
+    async def test_currency_names_and_league_name_are_read_from_live_page_shapes(self):
+        client = FixtureClient({
+            CURRENCY_PAGE: (
+                "<title>Currency_Exchange - 流亡2编年史</title>"
+                "<div class='page-content'>"
+                "<a class='item_currency StackableCurrency' href='Mirror_of_Kalandra'>"
+                "<img src='mirror.png'></a>"
+                "<a class='item_currency StackableCurrency' href='Mirror_of_Kalandra'>卡兰德的魔镜</a>"
+                "<a class='item_currency' href='Divine_Orb'>神圣石</a>"
+                "</div>"
+            ),
+            LEAGUE_CN_PAGE: (
+                "<title>赛季 - 流亡2编年史</title><div class='page-content'>"
+                "<table><tr><td>0.5.5</td><td>禁断仪式</td></tr></table></div>"
+            ),
+            LEAGUE_US_PAGE: (
+                "<title>Leagues - PoE2DB</title><div class='page-content'>"
+                "<table><tr><td>0.5.5</td><td>Forbidden Rites</td></tr></table></div>"
+            ),
+        })
+        names = await client.currency_names()
+        self.assertEqual(names["mirrorofkalandra"], "卡兰德的魔镜")
+        self.assertEqual(names["divineorb"], "神圣石")
+        self.assertEqual(await client.chinese_league_name("Forbidden Rites"), "禁断仪式")
+        self.assertEqual(await client.chinese_league_name("Unknown Season"), None)
 
 
 if __name__ == "__main__":
