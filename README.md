@@ -1,6 +1,6 @@
 # 流放之路2资料问答（AstrBot 插件）
 
-插件用于查询《流放之路 2》资料、价格和角色构筑。`/poe2` 联网回答问题并在有匹配图片时附图；`/poe2search` 搜索词条并返回摘要、来源链接和可用图片；`/poe2bd` 查找 poe.ninja 当前赛季角色并返回 Poe2DB 简体中文 Build 链接；`/poe2分析` 支持角色名、poe.ninja 角色或 PoB 链接、WeGame 分享链接，生成中文构筑分析并附传奇物品市集链接；分析公开 poe.ninja 构筑成功时还会附上其官方预览图。`/poe2 国际服物价` 和 `/poe2 国服物价` 返回神圣石价格图片，支持定时采集、手动采集与群通知。资料优先来自 [Poe2DB 简体中文站](https://poe2db.tw/cn/)，并检索 [Poe2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki)。
+插件用于查询《流放之路 2》资料、价格和角色构筑。`/poe2` 联网回答问题并在有匹配图片时附图；`/poe2search` 搜索词条并返回摘要、来源链接和可用图片；`/poe2bd` 查找 poe.ninja 当前赛季角色并返回 Poe2DB 简体中文 Build 链接；`/poe2分析` 支持角色名、poe.ninja 角色或 PoB 链接、WeGame 分享链接，生成中文构筑分析；公开 poe.ninja 构筑还可附官方预览图，角色详情分析会附装备、护符与珠宝的原生 Trade 搜索链接。`/poe2 国际服物价` 和 `/poe2 国服物价` 返回神圣石价格图片，支持定时采集、手动采集与群通知。资料优先来自 [Poe2DB 简体中文站](https://poe2db.tw/cn/)，并检索 [Poe2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki)。
 
 ## 安装
 
@@ -19,7 +19,7 @@ python -m playwright install chromium
 
 Chromium 仅用于按角色名搜索 poe.ninja 当前赛季公开 Builds 页面。poe.ninja PoB 分享从公开导出接口读取 PoB2 码，WeGame 分享通过 Poe2DB 接口解析，两者都不需要 Chromium。若未安装 Chromium、角色名无法唯一匹配或 Builds 页面加载失败，角色名查询会回退到筛选页链接。
 
-已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.22.8`。
+已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.22.9`。
 
 AstrBot 4.29.0 搭配 ChatGPT Codex 模型插件 1.0.4 时，`/poe2分析` 的工具调用可能报“不支持的模型调用参数：conversation_id”。可在该模型插件目录应用[兼容补丁](compat/astrbot_plugin_chatgpt_codex-v1.0.4-astrbot-v4.29.0.patch)并重载；补丁只忽略 AstrBot 自动传入的空值，不改变非空参数的校验。更新该模型插件后若错误重现，需重新应用补丁。本机 AstrBot 已应用并通过 PoB 分享链接实测。
 
@@ -35,8 +35,8 @@ AstrBot 4.29.0 搭配 ChatGPT Codex 模型插件 1.0.4 时，`/poe2分析` 的�
 | `/poe2 国服物价` | 发送最近一次生成的国服神圣石物价图片。 |
 | `/poe2search 词条名` | 直接搜索词条，返回摘要、资料链接和可用图片。 |
 | `/poe2bd 角色名` | 查找当前赛季角色，返回 poe.ninja 详情页和 Poe2DB 简体中文 Build 链接。 |
-| `/poe2分析 角色名` | 查找角色并生成中文构筑分析，附上可用的 poe.ninja 官方预览图。 |
-| `/poe2分析 链接` | 分析 poe.ninja 角色／PoB 分享链接或 WeGame 构筑分享链接；poe.ninja 构筑附可用预览图。 |
+| `/poe2分析 角色名` | 查找角色并生成中文构筑分析、可用的官方预览图和逐件装备的原生 Trade 链接。 |
+| `/poe2分析 链接` | 分析 poe.ninja 角色／PoB 分享链接或 WeGame 构筑分享链接；公开角色页可附原生 Trade 链接。 |
 
 ### 联网搜索
 
@@ -91,7 +91,9 @@ AstrBot 4.29.0 搭配 ChatGPT Codex 模型插件 1.0.4 时，`/poe2分析` 的�
 
 `/poe2分析 https://poe.ninja/poe2/pob/分享编号` 会读取该公开 PoB 分享页对应的 PoB2 导入码，由插件直接调用 `poe2-mcp` 的 `import_pob` 工具导入，再把解析后的构筑数据交给后续分析，并生成 Poe2DB 简体中文 Build 分享页。该分享链接不包含可确认的 poe.ninja 账号，因此不能声称已经读取了特定角色或其角色级天梯数据；若工具提供了可验证的职业或技能构筑对比，才会报告该比较。`/poe2分析 https://www.wegame.com.cn/helper/poe2/#/share/分享码` 会把分享码提交到 Poe2DB 的公开接口，跟随接口返回的简体中文构筑页并读取 `PoB Code`，再生成 Poe2DB 简体中文 Build 分享页，由插件直接调用 `poe2-mcp` 的 `import_pob` 工具导入并分析。此流程不使用 PoBR，也不需要 Chromium；AstrBot 只需能访问 Poe2DB。分享内容是公开链接，插件不要求 WeGame 账号或密码。WeGame 分享不包含 poe.ninja 角色账号，所以不能比较这个角色本人的天梯记录；只有 MCP 工具返回了可验证的职业或技能构筑对比数据时才会报告相关比较。
 
-分析会提取 PoB 中当前装备组和已镶嵌珠宝，只对明确标为传奇的物品查找市集链接。poe.ninja 角色和 poe.ninja PoB 分享构筑使用 Poe2DB `/us/` 国际服物品页；WeGame 构筑使用 Poe2DB `/cn/` 简体物品页的“市集”链接，保留国服页面提供的赛季路径，不回退到国际服市集。物品中文名取自对应中文条目。若分享页、装备数据或市集链接无法生成，会提供手动导入入口或说明缺失部分，不会猜测链接。需要当前会话配置可用聊天模型，且 AstrBot MCP 管理页中的 `poe2-mcp` 已连接并启用工具。
+角色名或 poe.ninja 角色详情链接会打开当前赛季的公开角色页，逐件点击页面的 [Trade 搜索功能](https://poe.ninja/posts/poe2-character-trade-search)，读取它为已装备物品、护符与珠宝生成的官方国际服交易搜索链接；普通和稀有装备也会尝试读取，保留页面选定的词缀筛选条件。链接较长时分段发送，不截断单条链接；若部分物品未生成链接，会列出取得数量并提示手动检查。插件会缓存结果 15 分钟，避免连续重复读取。此流程不再从 Poe2DB 物品页提取“市集”链接。
+
+独立 poe.ninja PoB 分享页与 WeGame 分享页没有对应角色页的原生 Trade 按钮，因此这两种输入仍可分析构筑，但无法提供逐件装备的 poe.ninja 原生交易链接，也不会回退到旧的 Poe2DB 链接。需要当前会话配置可用聊天模型，且 AstrBot MCP 管理页中的 `poe2-mcp` 已连接并启用工具。
 
 `/poe2search 词条名` 不调用聊天模型，直接搜索 Poe2DB 和 PoE2Wiki，按词条标题与搜索词的相似度排列结果，并显示简短摘要和原始页面链接；中文搜索命中 Poe2DB 后，会尝试用页面中的英文名称补查 Wiki。有 Poe2DB 图片时会额外发送图片；没有图片时仍以文字和链接回复。图片只接受 Poe2DB 图片 CDN 的 HTTPS 图片地址。没有直接命中时会返回两站的搜索页链接。技能、辅助宝石、装备、词缀、职业、怪物和地图等类别取决于资料站实际收录内容。
 
