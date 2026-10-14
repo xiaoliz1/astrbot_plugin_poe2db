@@ -1,0 +1,16 @@
+--- a/agent_provider.py
++++ b/agent_provider.py
+@@ -178,7 +178,12 @@
+ def _normalize_request_options(kwargs: dict[str, Any]) -> dict[str, Any]:
+     """Validate the small Responses parameter subset this provider preserves."""
+ 
+-    unknown = sorted(set(kwargs) - _SUPPORTED_REQUEST_OPTIONS)
++    # AstrBot 4.29 sends an empty conversation_id to tool loop providers.
++    unknown = sorted(
++        key for key in kwargs
++        if key not in _SUPPORTED_REQUEST_OPTIONS
++        and not (key == "conversation_id" and kwargs[key] is None)
++    )
+     if unknown:
+         raise CodexCapabilityError("不支持的模型调用参数：" + ", ".join(unknown))
+     if kwargs.get("stop") not in (None, [], ""):

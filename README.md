@@ -19,7 +19,9 @@ python -m playwright install chromium
 
 Chromium 仅用于按角色名搜索 poe.ninja 当前赛季公开 Builds 页面。poe.ninja PoB 分享从公开导出接口读取 PoB2 码，WeGame 分享通过 Poe2DB 接口解析，两者都不需要 Chromium。若未安装 Chromium、角色名无法唯一匹配或 Builds 页面加载失败，角色名查询会回退到筛选页链接。
 
-已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.22.5`。
+已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.22.6`。
+
+AstrBot 4.29.0 搭配 ChatGPT Codex 模型插件 1.0.4 时，`/poe2分析` 的工具调用可能报“不支持的模型调用参数：conversation_id”。可在该模型插件目录应用[兼容补丁](compat/astrbot_plugin_chatgpt_codex-v1.0.4-astrbot-v4.29.0.patch)并重载；补丁只忽略 AstrBot 自动传入的空值，不改变非空参数的校验。更新该模型插件后若错误重现，需重新应用补丁。本机 AstrBot 已应用并通过 PoB 分享链接实测。
 
 ## 📖 指令使用
 
