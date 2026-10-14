@@ -18,7 +18,6 @@ from quart import jsonify
 
 from .analysis_input import classify_analysis_input
 from .analysis_tools import exclude_tool_set_suffixes, filter_mcp_tool_set
-from .build_card import build_card_from_analysis, render_build_card_html
 from .builds import (
     PoeNinjaBuildsResolver,
     UniqueBuildItem,
@@ -160,7 +159,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.23.0",
+    "1.21.5",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -920,25 +919,6 @@ class Poe2DBPlugin(Star):
             )
         if len(chinese_analysis) > 6500:
             chinese_analysis = chinese_analysis[:6490].rstrip() + "……"
-        card = build_card_from_analysis(
-            chinese_analysis,
-            title=character_name,
-            league=league_name,
-            source_url=source_url,
-            chinese_build_url=chinese_build_url,
-        )
-        if card is not None:
-            try:
-                card_path = await self.html_render(
-                    render_build_card_html(card),
-                    data={},
-                    return_url=False,
-                    options={"type": "png", "full_page": True},
-                )
-                if card_path:
-                    yield event.image_result(str(card_path))
-            except Exception as exc:
-                self._log_build_analysis_error("中文构筑卡片生成失败", exc)
         market_link_results = await market_links_task
         references = "\n".join(
             f"[{index}] {source.title}：{source.url}"
