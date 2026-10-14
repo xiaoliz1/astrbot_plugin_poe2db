@@ -15,8 +15,6 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote, urlencode, urljoin, urlsplit
 
-from .poe_ninja_trade import NativeTradeItem, NativeTradeResult, valid_native_trade_url
-
 LOGGER = logging.getLogger(__name__)
 POE_NINJA_BASE_URL = "https://poe.ninja"
 _RESULTS_TIMEOUT_MS = 20_000
@@ -24,10 +22,8 @@ _SUCCESS_CACHE_SECONDS = 300
 _EMPTY_CACHE_SECONDS = 45
 _PROFILE_CACHE_SECONDS = 300
 _POB_CODE_CACHE_SECONDS = 300
-_TRADE_LINK_CACHE_SECONDS = 900
 _PROFILE_TEXT_LIMIT = 12_000
 _MAX_EQUIPMENT_TOOLTIPS = 36
-_TRADE_BUTTON_SELECTOR = 'button[aria-label="Search on Trade"]'
 _POB_CODE_SELECTOR = 'input[aria-label*="Import code for Path of Building" i]'
 _MAX_POB_XML_BYTES = 8_000_000
 
@@ -320,9 +316,6 @@ class PoeNinjaBuildsResolver:
         self._cache: dict[tuple[str, str], tuple[float, str | None]] = {}
         self._profile_cache: dict[str, tuple[float, str | None]] = {}
         self._pob_code_cache: dict[str, tuple[float, str | None]] = {}
-        self._trade_link_cache: dict[
-            str, tuple[float, NativeTradeResult | None]
-        ] = {}
 
     async def resolve_character_url(
         self, character_name: str, league_name: str
@@ -465,130 +458,6 @@ class PoeNinjaBuildsResolver:
                         LOGGER.debug(
                             "Unable to close poe.ninja PoB context", exc_info=True
                         )
-
-    async def read_character_trade_links(
-        self, profile_url: str, league_name: str
-    ) -> NativeTradeResult | None:
-        """Read each equipped item's Trade link from the public character UI.
-
-        The normal page generates these links after its Trade dialog opens.
-        No Builds/Profile API endpoint is called directly by this plugin.
-        """
-        if not is_public_character_profile_url(profile_url, league_name):
-            return None
-
-        cache_key = urlsplit(profile_url)._replace(query="", fragment="").geturl()
-        now = time.monotonic()
-        async with self._lock:
-            cached = self._trade_link_cache.get(cache_key)
-            if cached and cached[0] > now:
-                return cached[1]
-            if cached:
-                self._trade_link_cache.pop(cache_key, None)
-
-            context = None
-            try:
-                browser = await self._get_browser()
-                context = await browser.new_context(locale="en-US")
-                page = await context.new_page()
-                await page.route("**/*", self._route_public_page)
-                page.set_default_timeout(self.timeout_ms)
-                await page.goto(
-                    profile_url,
-                    wait_until="domcontentloaded",
-                    timeout=self.timeout_ms,
-                )
-                await page.wait_for_selector(
-                    _TRADE_BUTTON_SELECTOR,
-                    state="attached",
-                    timeout=self.timeout_ms,
-                )
-                result = await self._collect_native_trade_links(page, league_name)
-                cache_seconds = (
-                    _TRADE_LINK_CACHE_SECONDS if result.items else _EMPTY_CACHE_SECONDS
-                )
-                self._trade_link_cache[cache_key] = (
-                    time.monotonic() + cache_seconds,
-                    result,
-                )
-                self._trim_trade_link_cache()
-                return result
-            except Exception as exc:
-                LOGGER.warning(
-                    "Unable to read native Trade links from poe.ninja profile (%s)",
-                    type(exc).__name__,
-                )
-                self._trade_link_cache[cache_key] = (
-                    time.monotonic() + _EMPTY_CACHE_SECONDS,
-                    None,
-                )
-                self._trim_trade_link_cache()
-                return None
-            finally:
-                if context is not None:
-                    try:
-                        await context.close()
-                    except Exception:
-                        LOGGER.debug("Unable to close poe.ninja Trade context", exc_info=True)
-
-    async def _collect_native_trade_links(
-        self, page, league_name: str
-    ) -> NativeTradeResult:
-        buttons = page.locator(_TRADE_BUTTON_SELECTOR)
-        equipped_slots = await buttons.evaluate_all(
-            """buttons => {
-                const heading = [...document.querySelectorAll('h3')]
-                    .find(node => /base jewels|基础珠宝|基礎珠寶/i.test(
-                        node.textContent || ''));
-                return buttons.map((button, index) => {
-                    const slot = button.parentElement?.parentElement;
-                    const hasItem = Boolean(slot?.querySelector(
-                        'img, [style*="background-image: url"]'));
-                    const isJewel = Boolean(heading &&
-                        (heading.compareDocumentPosition(button) &
-                         Node.DOCUMENT_POSITION_FOLLOWING));
-                    return {index, hasItem, isJewel};
-                }).filter(slot => slot.hasItem);
-            }"""
-        )
-        equipped_count = len(equipped_slots)
-        items: list[NativeTradeItem] = []
-        deadline = time.monotonic() + 90
-        for slot_info in equipped_slots:
-            if time.monotonic() >= deadline:
-                break
-            index = slot_info["index"]
-            button = buttons.nth(index)
-            slot = button.locator("xpath=../..")
-            dialog = page.locator('[role="dialog"]')
-            try:
-                await slot.hover(timeout=3_000)
-                await button.click(timeout=3_000)
-                await dialog.wait_for(state="visible", timeout=3_000)
-                trade_link = dialog.get_by_role("link", name="Search on Trade")
-                await trade_link.wait_for(state="attached", timeout=6_000)
-                href = await trade_link.get_attribute("href")
-                name = " ".join((await dialog.locator("h2").first.inner_text()).split())
-                if (
-                    href
-                    and name
-                    and len(name) <= 160
-                    and valid_native_trade_url(href, league_name)
-                ):
-                    items.append(
-                        NativeTradeItem(name, href, bool(slot_info["isJewel"]))
-                    )
-            except Exception:
-                LOGGER.debug("Native Trade link missing for visible item %s", index)
-            finally:
-                try:
-                    if await dialog.count():
-                        await dialog.get_by_role("button", name="Close").click(
-                            timeout=2_000
-                        )
-                except Exception:
-                    LOGGER.debug("Unable to close poe.ninja Trade dialog", exc_info=True)
-        return NativeTradeResult(tuple(items), equipped_count)
 
     async def read_character_build_text(
         self, profile_url: str, league_name: str
@@ -779,11 +648,3 @@ class PoeNinjaBuildsResolver:
                 self._pob_code_cache.pop(key, None)
         while len(self._pob_code_cache) > 16:
             self._pob_code_cache.pop(next(iter(self._pob_code_cache)))
-
-    def _trim_trade_link_cache(self) -> None:
-        now = time.monotonic()
-        for key, (expires, _) in list(self._trade_link_cache.items()):
-            if expires <= now:
-                self._trade_link_cache.pop(key, None)
-        while len(self._trade_link_cache) > 32:
-            self._trade_link_cache.pop(next(iter(self._trade_link_cache)))

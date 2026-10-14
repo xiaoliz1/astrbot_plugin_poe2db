@@ -20,8 +20,10 @@ from .analysis_input import classify_analysis_input
 from .analysis_tools import exclude_tool_set_suffixes, filter_mcp_tool_set
 from .builds import (
     PoeNinjaBuildsResolver,
+    UniqueBuildItem,
     character_search_page_url,
     is_public_character_profile_url,
+    parse_pob_unique_items,
 )
 from .economy import (
     CurrencySnapshot,
@@ -33,6 +35,7 @@ from .economy import (
 from .poe2db import (
     Poe2DBClient,
     Poe2DBError,
+    MarketLink,
     Source,
     parse_multilingual_names,
     parse_multilingual_terms,
@@ -54,7 +57,6 @@ from .pob_share import (
 )
 from .poe_ninja_pob import PoeNinjaPobError, PoeNinjaPobResolver
 from .poe_ninja_card import PoeNinjaCardResolver
-from .poe_ninja_trade import format_native_trade_messages
 from .price_schedule import (
     next_hourly_price_refresh_at,
     next_price_refresh_at,
@@ -158,7 +160,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.22.9",
+    "1.22.8",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -859,7 +861,8 @@ class Poe2DBPlugin(Star):
             # A successful import is still useful if a follow-up analysis tool fails.
             analysis = imported_build_data or ""
 
-        _, chinese_build_url = await build_data_task
+        build_code, chinese_build_url = await build_data_task
+        unique_build_items = parse_pob_unique_items(build_code)
 
         if not analysis:
             yield event.plain_result(
@@ -868,14 +871,12 @@ class Poe2DBPlugin(Star):
             )
             return
 
-        trade_links_task = (
-            asyncio.create_task(
-                self.builds_resolver.read_character_trade_links(
-                    profile_url, league_name or ""
-                )
+        market_links_task = asyncio.create_task(
+            self._find_analysis_market_links(
+                unique_build_items,
+                league_name or "",
+                locale="cn" if analysis_input.kind == "wegame" else "us",
             )
-            if profile_url
-            else None
         )
         reference_sources = await self._find_analysis_reference_sources(
             provider_id, analysis
@@ -920,6 +921,7 @@ class Poe2DBPlugin(Star):
             )
         if len(chinese_analysis) > 6500:
             chinese_analysis = chinese_analysis[:6490].rstrip() + "……"
+        market_link_results = await market_links_task
         references = "\n".join(
             f"[{index}] {source.title}：{source.url}"
             for index, source in enumerate(reference_sources, 1)
@@ -929,20 +931,8 @@ class Poe2DBPlugin(Star):
         )
         if references:
             suffix += f"\nPoe2DB 资料来源：\n{references}"
-        if not trade_links_task:
-            suffix += (
-                "\n\n原生装备市集链接：该分享来源没有 poe.ninja 公开角色页的 Trade 按钮，"
-                "无法取得逐件装备的原生搜索链接。"
-            )
+        suffix += "\n\n" + self._format_analysis_market_links(market_link_results)
         yield event.plain_result(chinese_analysis + suffix)
-        if trade_links_task:
-            try:
-                trade_links = await trade_links_task
-            except Exception as exc:
-                self._log_build_analysis_error("读取 poe.ninja 原生交易链接失败", exc)
-                trade_links = None
-            for message in format_native_trade_messages(trade_links, source_url):
-                yield event.plain_result(message)
         card_url = await self.poe_ninja_card_resolver.resolve(source_url)
         if card_url:
             yield event.image_result(card_url)
@@ -1029,6 +1019,56 @@ class Poe2DBPlugin(Star):
                 seen.add(key)
                 sources.append(source)
         return sources
+
+    async def _find_analysis_market_links(
+        self,
+        items: list[UniqueBuildItem] | None,
+        league_name: str,
+        locale: str = "us",
+    ) -> list[tuple[UniqueBuildItem, MarketLink | None]] | None:
+        """Resolve Poe2DB The Market links for the active build's unique items."""
+        if items is None:
+            return None
+
+        async def find_one(item: UniqueBuildItem) -> MarketLink | None:
+            try:
+                return await self.client.find_unique_market_link(
+                    item.name, league_name, locale=locale
+                )
+            except Exception as exc:
+                self._log_build_analysis_error(
+                    f"Poe2DB 市集链接检索失败（{item.name}）", exc
+                )
+                return None
+
+        results = await asyncio.gather(*(find_one(item) for item in items))
+        return list(zip(items, results))
+
+    @staticmethod
+    def _format_analysis_market_links(
+        results: list[tuple[UniqueBuildItem, MarketLink | None]] | None,
+    ) -> str:
+        if results is None:
+            return "传奇装备与传奇珠宝市集链接：暂时无法从角色公开 PoB 数据中确认装备。"
+        if not results:
+            return "传奇装备与传奇珠宝市集链接：当前装备配置中没有检测到传奇物品。"
+
+        sections: list[str] = ["传奇装备与传奇珠宝市集链接："]
+        for is_jewel, heading in ((False, "传奇装备"), (True, "传奇珠宝")):
+            group = [(item, link) for item, link in results if item.is_jewel == is_jewel]
+            if not group:
+                continue
+            sections.append(heading + "：")
+            for item, link in group:
+                chinese_name = link.chinese_name if link else None
+                display_name = chinese_name or item.name
+                if link:
+                    sections.append(f"- {display_name}：{link.url}")
+                else:
+                    sections.append(
+                        f"- {display_name}：对应的 Poe2DB 条目暂未提供可用的市集链接。"
+                    )
+        return "\n".join(sections)
 
     def _log_build_analysis_error(self, source: str, error: Exception) -> None:
         plugin_logger = getattr(self, "logger", None)
