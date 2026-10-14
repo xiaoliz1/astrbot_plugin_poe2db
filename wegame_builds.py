@@ -136,9 +136,20 @@ class WeGameBuildCodeResolver:
 
     @staticmethod
     async def _return_to_build_panel(page) -> None:
-        """Wait for PoBR's post-import Items tab, then reopen Build to export."""
-        items_heading = page.get_by_role("heading", name=re.compile(r"^items$", re.I))
-        await items_heading.wait_for(state="visible")
+        """Wait for a completed import, surface PoBR errors, then reopen Build."""
+        await page.wait_for_function(
+            """() => {
+                const activeTab = document.querySelector('.topbar-tab.is-active');
+                const itemsActive = activeTab?.textContent?.trim().toLowerCase() === 'items';
+                return itemsActive || Boolean(document.querySelector('.calc-error[role="alert"]'));
+            }"""
+        )
+
+        import_error = page.locator('.calc-error[role="alert"]').first
+        if await import_error.is_visible():
+            message = (await import_error.inner_text()).strip()
+            if message:
+                raise WeGameBuildError(f"PoBR 导入失败：{message[:400]}")
 
         build_tab = page.get_by_role("button", name=re.compile(r"^build$", re.I))
         await build_tab.wait_for(state="visible")

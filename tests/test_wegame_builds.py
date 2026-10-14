@@ -55,10 +55,12 @@ class _FakeResponse:
 
 
 class _FakeLocator:
-    def __init__(self, events, selector):
+    def __init__(self, events, selector, visible=False, text=""):
         self.events = events
         self.selector = selector
         self.first = self
+        self.visible = visible
+        self.text = text
 
     async def wait_for(self, state):
         self.events.append(("wait", self.selector, state))
@@ -69,13 +71,29 @@ class _FakeLocator:
     async def click(self):
         self.events.append(("click", self.selector))
 
+    async def is_visible(self):
+        return self.visible
+
+    async def inner_text(self):
+        return self.text
+
 
 class _FakePage:
-    def __init__(self):
+    def __init__(self, import_error=""):
         self.events = []
+        self.import_error = import_error
+        self.wait_condition = ""
+
+    async def wait_for_function(self, condition):
+        self.wait_condition = condition
 
     def locator(self, selector):
-        return _FakeLocator(self.events, selector)
+        return _FakeLocator(
+            self.events,
+            selector,
+            visible=bool(self.import_error),
+            text=self.import_error,
+        )
 
     def get_by_role(self, role, name):
         return _FakeLocator(self.events, f"role:{role}:{name.pattern}")
@@ -148,19 +166,26 @@ class WeGameBuildResolverTests(unittest.TestCase):
                 self.assertEqual(route.action, "fulfill")
                 self.assertIs(route.fulfilled["response"], response)
 
-    def test_import_waits_for_items_tab_then_returns_to_build_before_export(self):
+    def test_import_waits_for_active_items_tab_then_returns_to_build_before_export(self):
         page = _FakePage()
 
         asyncio.run(WeGameBuildCodeResolver._return_to_build_panel(page))
 
+        self.assertIn(".topbar-tab.is-active", page.wait_condition)
+        self.assertIn('.calc-error[role="alert"]', page.wait_condition)
         self.assertEqual(
             page.events,
             [
-                ("wait", "role:heading:^items$", "visible"),
                 ("wait", "role:button:^build$", "visible"),
                 ("click", "role:button:^build$"),
             ],
         )
+
+    def test_import_surfaces_visible_pobr_error_instead_of_timing_out(self):
+        page = _FakePage("invalid WeGame jewel data")
+
+        with self.assertRaisesRegex(WeGameBuildError, "PoBR 导入失败：invalid WeGame jewel data"):
+            asyncio.run(WeGameBuildCodeResolver._return_to_build_panel(page))
 
 
 if __name__ == "__main__":
