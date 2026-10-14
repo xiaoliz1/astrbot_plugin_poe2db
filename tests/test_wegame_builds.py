@@ -26,6 +26,33 @@ class _FakeRoute:
         self.action = "continue"
 
 
+class _FakeLocator:
+    def __init__(self, events, selector):
+        self.events = events
+        self.selector = selector
+        self.first = self
+
+    async def wait_for(self, state):
+        self.events.append(("wait", self.selector, state))
+
+    async def fill(self, value):
+        self.events.append(("fill", self.selector, value))
+
+    async def click(self):
+        self.events.append(("click", self.selector))
+
+
+class _FakePage:
+    def __init__(self):
+        self.events = []
+
+    def locator(self, selector):
+        return _FakeLocator(self.events, selector)
+
+    def get_by_role(self, role, name):
+        return _FakeLocator(self.events, f"role:{role}:{name.pattern}")
+
+
 class WeGameBuildResolverTests(unittest.TestCase):
     def test_rejects_non_wegame_urls_before_starting_chromium(self):
         resolver = WeGameBuildCodeResolver()
@@ -49,6 +76,20 @@ class WeGameBuildResolverTests(unittest.TestCase):
         self.assertEqual(image.action, "abort")
         self.assertEqual(external.action, "abort")
         self.assertEqual(insecure.action, "abort")
+
+    def test_import_waits_for_items_tab_then_returns_to_build_before_export(self):
+        page = _FakePage()
+
+        asyncio.run(WeGameBuildCodeResolver._return_to_build_panel(page))
+
+        self.assertEqual(
+            page.events,
+            [
+                ("wait", "role:heading:^items$", "visible"),
+                ("wait", "role:button:^build$", "visible"),
+                ("click", "role:button:^build$"),
+            ],
+        )
 
 
 if __name__ == "__main__":

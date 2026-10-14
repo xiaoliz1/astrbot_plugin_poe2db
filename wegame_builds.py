@@ -40,12 +40,14 @@ class WeGameBuildCodeResolver:
 
         async with self._lock:
             context = None
+            stage = "启动 Chromium"
             try:
                 browser = await self._get_browser()
                 context = await browser.new_context(locale="en-US")
                 page = await context.new_page()
                 page.set_default_timeout(self.timeout_ms)
                 await page.route("**/*", self._route_pobr_page)
+                stage = "打开 PoBR 页面"
                 await page.goto(
                     POBR_WEB_URL,
                     wait_until="domcontentloaded",
@@ -56,17 +58,17 @@ class WeGameBuildCodeResolver:
                 if await dismiss.count() and await dismiss.first.is_visible():
                     await dismiss.first.click()
 
+                stage = "导入 WeGame 构筑并返回构筑页"
                 input_box = page.locator("textarea.import-code").first
                 await input_box.wait_for(state="visible")
                 await input_box.fill(parsed.value)
 
-                import_button = page.get_by_role(
-                    "button", name=re.compile(r"import as new build", re.I)
-                )
+                import_button = page.locator(".import-submit")
                 await import_button.wait_for(state="visible")
                 await import_button.click()
-                await page.locator(".import-summary").wait_for(state="visible")
+                await self._return_to_build_panel(page)
 
+                stage = "生成 PoB2 分享码"
                 generate_button = page.get_by_role(
                     "button", name=re.compile(r"generate share code", re.I)
                 )
@@ -91,19 +93,41 @@ class WeGameBuildCodeResolver:
                 raise
             except Exception as exc:
                 LOGGER.warning(
-                    "WeGame to PoB2 conversion through PoBR failed (%s)",
+                    "WeGame to PoB2 conversion through PoBR failed during %s (%s)",
+                    stage,
                     type(exc).__name__,
                 )
-                raise WeGameBuildError(
-                    "PoBR 转换页面没有完成导入。请确认 Chromium 已安装、网络可访问 PoBR/WeGame，"
-                    "并检查 WeGame 分享链接是否仍有效。"
-                ) from exc
+                if stage == "启动 Chromium":
+                    if isinstance(exc, ModuleNotFoundError) and exc.name == "playwright":
+                        message = "AstrBot 运行环境没有安装 Playwright，请重新安装插件依赖后再试。"
+                    else:
+                        message = "PoBR 的 Chromium 无法启动，请确认已在 AstrBot 运行环境安装 Chromium 后重试。"
+                elif stage == "打开 PoBR 页面":
+                    message = "无法打开 PoBR 转换页面，请检查 AstrBot 到 pobr-web.pages.dev 的网络连接。"
+                elif stage == "导入 WeGame 构筑并返回构筑页":
+                    message = (
+                        "PoBR 没有完成 WeGame 构筑导入。请检查 AstrBot 到 PoBR 的网络连接，"
+                        "并确认该分享链接仍可公开访问。"
+                    )
+                else:
+                    message = "PoBR 已导入构筑，但生成 PoB2 分享码失败，请稍后重试。"
+                raise WeGameBuildError(f"{message}（阶段：{stage}；错误：{type(exc).__name__}）") from exc
             finally:
                 if context is not None:
                     try:
                         await context.close()
                     except Exception:
                         LOGGER.debug("Unable to close PoBR browser context", exc_info=True)
+
+    @staticmethod
+    async def _return_to_build_panel(page) -> None:
+        """Wait for PoBR's post-import Items tab, then reopen Build to export."""
+        items_heading = page.get_by_role("heading", name=re.compile(r"^items$", re.I))
+        await items_heading.wait_for(state="visible")
+
+        build_tab = page.get_by_role("button", name=re.compile(r"^build$", re.I))
+        await build_tab.wait_for(state="visible")
+        await build_tab.click()
 
     async def close(self) -> None:
         async with self._lock:
