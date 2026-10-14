@@ -556,6 +556,7 @@ class Poe2DBPlugin(Star):
 
     @filter.command("poe2bd")
     async def poe2bd(self, event: AstrMessageEvent):
+        """按角色名查询当前赛季构筑，返回角色详情与简体中文 Build 链接。用法：/poe2bd 角色名。"""
         self._remember_group_session(event)
         character_name = _character_name_from_message(event.message_str)
         if not character_name:
@@ -621,6 +622,7 @@ class Poe2DBPlugin(Star):
 
     @filter.command("poe2分析")
     async def poe2_analyze(self, event: AstrMessageEvent):
+        """分析角色构筑。用法：/poe2分析 角色名，或 /poe2分析 poe.ninja、WeGame 链接。"""
         self._remember_group_session(event)
         raw_target = _analysis_character_name_from_message(event.message_str)
         if not raw_target:
@@ -1069,6 +1071,7 @@ class Poe2DBPlugin(Star):
 
     @filter.command("poe2search")
     async def poe2search(self, event: AstrMessageEvent):
+        """搜索游戏词条，返回摘要、来源链接及可用图片。用法：/poe2search 词条名。"""
         self._remember_group_session(event)
         query = _search_query_from_message(event.message_str)
         if not query:
@@ -1301,11 +1304,19 @@ class Poe2DBPlugin(Star):
 
     @filter.command("poe2")
     async def poe2(self, event: AstrMessageEvent):
+        """查询游戏资料或物价。用法：/poe2 问题、/poe2 国际服物价、/poe2 国服物价。"""
         self._remember_group_session(event)
         question = _question_from_message(event.message_str)
         if not question:
             yield event.plain_result(
-                "用法：/poe2 碎骨有什么效果？、/poe2 国际服物价 或 /poe2 国服物价"
+                "《流放之路 2》命令：\n"
+                "/poe2 问题\n"
+                "/poe2 国际服物价\n"
+                "/poe2 国服物价\n"
+                "/poe2bd 角色名\n"
+                "/poe2分析 角色名\n"
+                "/poe2分析 链接\n"
+                "/poe2search 词条名"
             )
             return
         if len(question) > 300:
