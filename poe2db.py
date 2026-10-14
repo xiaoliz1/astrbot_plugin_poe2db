@@ -20,7 +20,7 @@ BASE_URLS = {
 }
 PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.19.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.20.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 
 
 class Poe2DBError(RuntimeError):

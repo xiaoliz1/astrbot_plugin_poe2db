@@ -21,6 +21,17 @@ _POB_CODE_RE = re.compile(r"^[A-Za-z0-9_+/=-]{80,1000000}$")
 _SHARE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 
 
+def format_character_build_links(profile_url: str, share_url: str | None) -> str:
+    """Format the public character link followed by its Chinese PoB share page."""
+    result = f"角色详情：{profile_url}\nPoe2DB 简体中文 Build："
+    if share_url:
+        return f"{result}\n{share_url}"
+    return (
+        f"{result}\n本次未能自动生成；可稍后重试或手动导入 PoB：\n"
+        f"{POE2DB_POB_IMPORT_URL}"
+    )
+
+
 class PobShareError(RuntimeError):
     """A character PoB code could not be exported or shared."""
 
@@ -199,7 +210,7 @@ class Poe2DBPobClient:
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
                 "User-Agent": (
-                    "astrbot_plugin_poe2db/1.18.0 "
+                    "astrbot_plugin_poe2db/1.20.0 "
                     "(https://github.com/xiaoliz1/astrbot_plugin_poe2db; "
                     "contact: https://github.com/xiaoliz1/astrbot_plugin_poe2db/issues)"
                 ),

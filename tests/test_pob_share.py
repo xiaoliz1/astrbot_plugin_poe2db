@@ -16,6 +16,7 @@ from astrbot_plugin_poe2db.pob_share import (
     POE2DB_POB_URL_PREFIX,
     PobShareError,
     Poe2DBPobClient,
+    format_character_build_links,
     _share_id_from_response,
     character_identity_from_profile_url,
     extract_pob_code,
@@ -29,6 +30,26 @@ def sample_pob_code() -> str:
 
 
 class Poe2DBPobShareTests(unittest.TestCase):
+    def test_formats_profile_link_followed_by_chinese_build_share_link(self):
+        text = format_character_build_links(
+            "https://poe.ninja/poe2/builds/league/character/account/name",
+            "https://poe2db.tw/cn/pob/AbCdEf123456",
+        )
+
+        self.assertEqual(
+            text,
+            "角色详情：https://poe.ninja/poe2/builds/league/character/account/name\n"
+            "Poe2DB 简体中文 Build：\nhttps://poe2db.tw/cn/pob/AbCdEf123456",
+        )
+
+    def test_manual_import_link_is_given_when_share_page_is_unavailable(self):
+        text = format_character_build_links(
+            "https://poe.ninja/poe2/builds/league/character/account/name", None
+        )
+
+        self.assertIn("Poe2DB 简体中文 Build：", text)
+        self.assertIn("https://poe2db.tw/cn/pob", text)
+
     def test_extracts_account_and_character_from_detail_path(self):
         account, character = character_identity_from_profile_url(
             "https://poe.ninja/poe2/builds/forbiddenrites/character/"

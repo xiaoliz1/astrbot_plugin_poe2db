@@ -50,6 +50,7 @@ from .pob_share import (
     POE2DB_POB_IMPORT_URL,
     PobShareError,
     Poe2DBPobClient,
+    format_character_build_links,
 )
 from .price_schedule import (
     next_hourly_price_refresh_at,
@@ -153,7 +154,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.19.0",
+    "1.20.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -644,6 +645,10 @@ class Poe2DBPlugin(Star):
             )
             return
 
+        build_data_task = asyncio.create_task(
+            self._read_analysis_build_data(profile_url, league_name)
+        )
+
         try:
             tool_manager = self.context.get_llm_tool_manager()
             tools = filter_mcp_tool_set(tool_manager, "poe2-mcp")
@@ -651,9 +656,10 @@ class Poe2DBPlugin(Star):
             self._log_build_analysis_error("读取 AstrBot MCP 工具失败", exc)
             tools = None
         if tools is None or tools.empty():
+            _, chinese_build_url = await build_data_task
             yield event.plain_result(
                 "已找到角色详情页，但 AstrBot 当前没有加载名为 poe2-mcp 的可用工具。\n"
-                f"角色详情：{profile_url}\n"
+                f"{format_character_build_links(profile_url, chinese_build_url)}\n"
                 "请确认 MCP 管理页中的 poe2-mcp 已连接，且工具处于启用状态。"
             )
             return
@@ -663,18 +669,16 @@ class Poe2DBPlugin(Star):
                 event.unified_msg_origin
             )
         except Exception:
+            _, chinese_build_url = await build_data_task
             yield event.plain_result(
                 "已找到角色详情页，但当前会话没有可用聊天模型，无法整理分析结果。\n"
-                f"角色详情：{profile_url}"
+                f"{format_character_build_links(profile_url, chinese_build_url)}"
             )
             return
 
         tool_names = ", ".join(tool.name for tool in tools.tools)
         yield event.plain_result(
             f"已定位角色，正在读取构筑并匹配 Poe2DB 中文词条：{character_name}"
-        )
-        build_code_task = asyncio.create_task(
-            self.builds_resolver.read_character_pob_code(profile_url, league_name)
         )
         try:
             response = await self.context.tool_loop_agent(
@@ -704,17 +708,13 @@ class Poe2DBPlugin(Star):
             self._log_build_analysis_error("poe2-mcp 构筑分析失败", exc)
             analysis = ""
 
-        try:
-            build_code = await build_code_task
-            unique_build_items = parse_pob_unique_items(build_code)
-        except Exception as exc:
-            self._log_build_analysis_error("读取角色传奇装备失败", exc)
-            unique_build_items = None
+        build_code, chinese_build_url = await build_data_task
+        unique_build_items = parse_pob_unique_items(build_code)
 
         if not analysis:
             yield event.plain_result(
                 "poe2-mcp 未能返回角色分析结果，请检查 MCP 工具调用日志后重试。\n"
-                f"角色详情：{profile_url}"
+                f"{format_character_build_links(profile_url, chinese_build_url)}"
             )
             return
 
@@ -767,11 +767,37 @@ class Poe2DBPlugin(Star):
             f"[{index}] {source.title}：{source.url}"
             for index, source in enumerate(reference_sources, 1)
         )
-        suffix = f"\n\n角色详情：{profile_url}"
+        suffix = "\n\n" + format_character_build_links(
+            profile_url, chinese_build_url
+        )
         if references:
             suffix += f"\nPoe2DB 资料来源：\n{references}"
         suffix += "\n\n" + self._format_analysis_market_links(market_link_results)
         yield event.plain_result(chinese_analysis + suffix)
+
+    async def _read_analysis_build_data(
+        self, profile_url: str, league_name: str
+    ) -> tuple[str | None, str | None]:
+        """Read the public PoB code and create its cached Chinese share page."""
+        try:
+            build_code = await self.builds_resolver.read_character_pob_code(
+                profile_url, league_name
+            )
+        except Exception as exc:
+            self._log_build_analysis_error("读取角色 PoB 导出码失败", exc)
+            return None, None
+        if not build_code:
+            self._log_build_analysis_error(
+                "读取角色 PoB 导出码失败",
+                PobShareError("未能从 poe.ninja 公开角色页读取 PoB 导出码。"),
+            )
+            return None, None
+        try:
+            share_url = await self.pob_share_client.create_share_url(build_code)
+        except Exception as exc:
+            self._log_build_analysis_error("生成 Poe2DB 简体中文 Build 失败", exc)
+            return build_code, None
+        return build_code, share_url
 
     async def _find_analysis_reference_sources(
         self, provider_id: str, analysis: str
