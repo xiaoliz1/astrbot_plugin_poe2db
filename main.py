@@ -17,7 +17,12 @@ from astrbot.core.utils.session_waiter import (
 from quart import jsonify
 
 from .analysis_tools import filter_mcp_tool_set
-from .builds import PoeNinjaBuildsResolver, character_search_page_url
+from .builds import (
+    PoeNinjaBuildsResolver,
+    UniqueBuildItem,
+    character_search_page_url,
+    parse_pob_unique_items,
+)
 from .economy import (
     CurrencySnapshot,
     EconomyError,
@@ -28,6 +33,7 @@ from .economy import (
 from .poe2db import (
     Poe2DBClient,
     Poe2DBError,
+    MarketLink,
     Source,
     parse_multilingual_names,
     parse_multilingual_terms,
@@ -147,7 +153,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.18.0",
+    "1.19.0",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -667,6 +673,9 @@ class Poe2DBPlugin(Star):
         yield event.plain_result(
             f"已定位角色，正在读取构筑并匹配 Poe2DB 中文词条：{character_name}"
         )
+        build_code_task = asyncio.create_task(
+            self.builds_resolver.read_character_pob_code(profile_url, league_name)
+        )
         try:
             response = await self.context.tool_loop_agent(
                 event=event,
@@ -695,6 +704,13 @@ class Poe2DBPlugin(Star):
             self._log_build_analysis_error("poe2-mcp 构筑分析失败", exc)
             analysis = ""
 
+        try:
+            build_code = await build_code_task
+            unique_build_items = parse_pob_unique_items(build_code)
+        except Exception as exc:
+            self._log_build_analysis_error("读取角色传奇装备失败", exc)
+            unique_build_items = None
+
         if not analysis:
             yield event.plain_result(
                 "poe2-mcp 未能返回角色分析结果，请检查 MCP 工具调用日志后重试。\n"
@@ -702,6 +718,9 @@ class Poe2DBPlugin(Star):
             )
             return
 
+        market_links_task = asyncio.create_task(
+            self._find_analysis_market_links(unique_build_items, league_name)
+        )
         reference_sources = await self._find_analysis_reference_sources(
             provider_id, analysis
         )
@@ -743,6 +762,7 @@ class Poe2DBPlugin(Star):
             )
         if len(chinese_analysis) > 6500:
             chinese_analysis = chinese_analysis[:6490].rstrip() + "……"
+        market_link_results = await market_links_task
         references = "\n".join(
             f"[{index}] {source.title}：{source.url}"
             for index, source in enumerate(reference_sources, 1)
@@ -750,6 +770,7 @@ class Poe2DBPlugin(Star):
         suffix = f"\n\n角色详情：{profile_url}"
         if references:
             suffix += f"\nPoe2DB 资料来源：\n{references}"
+        suffix += "\n\n" + self._format_analysis_market_links(market_link_results)
         yield event.plain_result(chinese_analysis + suffix)
 
     async def _find_analysis_reference_sources(
@@ -802,6 +823,57 @@ class Poe2DBPlugin(Star):
                 seen.add(key)
                 sources.append(source)
         return sources
+
+    async def _find_analysis_market_links(
+        self,
+        items: list[UniqueBuildItem] | None,
+        league_name: str,
+    ) -> list[tuple[UniqueBuildItem, MarketLink | None]] | None:
+        """Resolve Poe2DB The Market links for the active build's unique items."""
+        if items is None:
+            return None
+
+        async def find_one(item: UniqueBuildItem) -> MarketLink | None:
+            try:
+                return await self.client.find_unique_market_link(item.name, league_name)
+            except Exception as exc:
+                self._log_build_analysis_error(
+                    f"Poe2DB 市集链接检索失败（{item.name}）", exc
+                )
+                return None
+
+        results = await asyncio.gather(*(find_one(item) for item in items))
+        return list(zip(items, results))
+
+    @staticmethod
+    def _format_analysis_market_links(
+        results: list[tuple[UniqueBuildItem, MarketLink | None]] | None,
+    ) -> str:
+        if results is None:
+            return "传奇装备与传奇珠宝市集链接：暂时无法从角色公开 PoB 数据中确认装备。"
+        if not results:
+            return "传奇装备与传奇珠宝市集链接：当前装备配置中没有检测到传奇物品。"
+
+        sections: list[str] = ["传奇装备与传奇珠宝市集链接："]
+        for is_jewel, heading in ((False, "传奇装备"), (True, "传奇珠宝")):
+            group = [(item, link) for item, link in results if item.is_jewel == is_jewel]
+            if not group:
+                continue
+            sections.append(heading + "：")
+            for item, link in group:
+                chinese_name = link.chinese_name if link else None
+                display_name = (
+                    f"{chinese_name}（{item.name}）"
+                    if chinese_name and chinese_name.casefold() != item.name.casefold()
+                    else item.name
+                )
+                if link:
+                    sections.append(f"- {display_name}：{link.url}")
+                else:
+                    sections.append(
+                        f"- {display_name}：Poe2DB 英文条目暂未提供可用的 The Market 链接。"
+                    )
+        return "\n".join(sections)
 
     def _log_build_analysis_error(self, source: str, error: Exception) -> None:
         plugin_logger = getattr(self, "logger", None)

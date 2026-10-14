@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import re
 import time
 import unicodedata
+import xml.etree.ElementTree as ET
+import zlib
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote, urlencode, urljoin, urlsplit
 
@@ -21,6 +25,141 @@ _POB_CODE_CACHE_SECONDS = 300
 _PROFILE_TEXT_LIMIT = 12_000
 _MAX_EQUIPMENT_TOOLTIPS = 36
 _POB_CODE_SELECTOR = 'input[aria-label*="Import code for Path of Building" i]'
+_MAX_POB_XML_BYTES = 8_000_000
+
+
+@dataclass(frozen=True)
+class UniqueBuildItem:
+    """An equipped unique item found in the active PoB item/tree sets."""
+
+    name: str
+    is_jewel: bool
+
+
+def parse_pob_unique_items(pob_code: str | None) -> list[UniqueBuildItem] | None:
+    """Decode a PoB2 share code and return equipped unique items.
+
+    ``None`` means the export could not be decoded or did not contain a usable
+    active item set. An empty list means the export was valid and had no unique
+    gear or socketed unique jewels in its active configuration.
+    """
+    if not isinstance(pob_code, str) or not pob_code.strip():
+        return None
+    code = "".join(pob_code.split())
+    if len(code) > 1_000_000:
+        return None
+
+    try:
+        padded = code + "=" * (-len(code) % 4)
+        compressed = base64.b64decode(padded, altchars=b"-_", validate=True)
+        xml_bytes = _bounded_pob_inflate(compressed)
+        if xml_bytes is None:
+            return None
+        root = ET.fromstring(xml_bytes)
+    except (ValueError, ET.ParseError, zlib.error):
+        return None
+
+    if root.tag.casefold() not in {"pathofbuilding2", "pathofbuilding"}:
+        return None
+    items_node = root.find("Items")
+    if items_node is None:
+        return None
+
+    item_sets = items_node.findall("ItemSet")
+    active_item_set_id = items_node.get("activeItemSet")
+    if item_sets:
+        active_item_set = next(
+            (item_set for item_set in item_sets if item_set.get("id") == active_item_set_id),
+            None,
+        ) if active_item_set_id else item_sets[0]
+        if active_item_set is None:
+            return None
+        equipped_ids = [
+            slot.get("itemId", "").strip()
+            for slot in active_item_set.findall(".//Slot")
+            if slot.get("itemId", "").strip() not in {"", "0"}
+        ]
+    elif items_node.findall("Item"):
+        return None
+    else:
+        return []
+
+    # Passive-tree sockets store their jewel item IDs in the active Spec.
+    tree_node = root.find("Tree")
+    if tree_node is not None:
+        specs = tree_node.findall("Spec")
+        active_spec_id = tree_node.get("activeSpec")
+        active_spec = next(
+            (spec for spec in specs if spec.get("id") == active_spec_id), None
+        ) if active_spec_id else (specs[0] if specs else None)
+        if active_spec is not None:
+            equipped_ids.extend(
+                socket.get("itemId", "").strip()
+                for socket in active_spec.findall(".//Socket")
+                if socket.get("itemId", "").strip() not in {"", "0"}
+            )
+
+    item_by_id = {
+        item.get("id", "").strip(): item
+        for item in items_node.findall("Item")
+        if item.get("id", "").strip()
+    }
+    results: list[UniqueBuildItem] = []
+    seen_names: set[str] = set()
+    for item_id in equipped_ids:
+        item = item_by_id.get(item_id)
+        if item is None:
+            continue
+        item_text = "".join(item.itertext())
+        lines = [line.strip() for line in item_text.splitlines() if line.strip()]
+        rarity_index = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if re.fullmatch(r"Rarity\s*:\s*Unique", line, re.IGNORECASE)
+            ),
+            None,
+        )
+        if rarity_index is None or rarity_index + 1 >= len(lines):
+            continue
+        name = lines[rarity_index + 1].strip()
+        if not name or len(name) > 100 or "://" in name:
+            continue
+        name_key = name.casefold()
+        if name_key in seen_names:
+            continue
+        item_class = ""
+        for line in lines[: rarity_index + 3]:
+            class_match = re.match(
+                r"Item Class\s*:\s*(.+)$", line, re.IGNORECASE
+            )
+            if class_match:
+                item_class = class_match.group(1).strip().casefold()
+                break
+        base_type = lines[rarity_index + 2] if rarity_index + 2 < len(lines) else ""
+        is_jewel = "jewel" in item_class or "jewel" in base_type.casefold()
+        results.append(UniqueBuildItem(name=name, is_jewel=is_jewel))
+        seen_names.add(name_key)
+    return results
+
+
+def _bounded_pob_inflate(compressed: bytes) -> bytes | None:
+    """Inflate an untrusted PoB payload with a strict decompressed-size cap."""
+    for window_bits in (zlib.MAX_WBITS, -zlib.MAX_WBITS):
+        try:
+            decoder = zlib.decompressobj(window_bits)
+            result = decoder.decompress(compressed, _MAX_POB_XML_BYTES + 1)
+            if (
+                len(result) > _MAX_POB_XML_BYTES
+                or decoder.unconsumed_tail
+                or decoder.unused_data
+                or not decoder.eof
+            ):
+                continue
+            return result
+        except zlib.error:
+            continue
+    return None
 
 
 def _league_slug(league_name: str) -> str:

@@ -206,6 +206,60 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
             [("碎骨", ["碎骨"]), ("冰霜新星", ["冰霜新星"])],
         )
 
+    async def test_unique_market_link_uses_poe2db_market_and_current_league(self):
+        item_name = "Mageblood"
+        query_url = search_url(item_name, "us")
+        us_url = "https://poe2db.tw/us/Mageblood"
+        cn_url = "https://poe2db.tw/cn/Mageblood"
+        stale_market_url = (
+            "https://www.pathofexile.com/trade2/search/poe2/Runes%20of%20Aldur"
+            "?q=%7B%22query%22%3A%7B%22name%22%3A%22Mageblood%22%7D%7D"
+        )
+        pages = {
+            query_url: f"""<html><head><title>Mageblood Utility Belt - PoE2DB</title></head>
+              <body><div class="page-content"><h3>Mageblood</h3>
+                <table><tr><td>The Market</td><td><a href="{stale_market_url}">The Market</a></td></tr></table>
+              </div></body></html>""",
+            cn_url: """<html><head><title>魔血 實用腰帶 - Poe2DB</title></head>
+              <body><div class="page-content"><h3>魔血</h3></div></body></html>""",
+        }
+        client = FixtureClient(pages)
+        client._resolved_urls[query_url] = us_url
+
+        result = await client.find_unique_market_link(item_name, "Forbidden Rites")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.chinese_name, "魔血")
+        self.assertEqual(
+            result.url,
+            "https://www.pathofexile.com/trade2/search/poe2/Forbidden%20Rites"
+            "?q=%7B%22query%22%3A%7B%22name%22%3A%22Mageblood%22%7D%7D",
+        )
+
+    async def test_market_link_search_requires_exact_article_and_item_filter(self):
+        item_name = "Mageblood"
+        query_url = search_url(item_name, "us")
+        us_url = "https://poe2db.tw/us/Mageblood"
+        mismatched_market_url = (
+            "https://www.pathofexile.com/trade2/search/poe2/OldLeague"
+            "?q=%7B%22query%22%3A%7B%22name%22%3A%22Different+Item%22%7D%7D"
+        )
+        pages = {
+            query_url: """<html><head><title>search - Poe2DB</title></head>
+              <body><div class="page-content"><div class="card"><ul class="list-group">
+                <li><a href="/us/Mageblood">Mageblood</a></li>
+              </ul></div></div></body></html>""",
+            us_url: f"""<html><head><title>Mageblood Utility Belt - Poe2DB</title></head>
+              <body><div class="page-content"><h3>Mageblood</h3>
+                <table><tr><td>The Market</td><td><a href="{mismatched_market_url}">The Market</a></td></tr></table>
+              </div></body></html>""",
+        }
+        client = FixtureClient(pages)
+
+        result = await client.find_unique_market_link(item_name, "Forbidden Rites")
+
+        self.assertIsNone(result)
+
     async def test_homepage_response_is_not_used_as_evidence(self):
         query_url = search_url("无关词")
         tw_url = search_url("无关词", "tw")
@@ -236,8 +290,13 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(parse_query_terms("bad JSON", "「魔血」有什么效果？"), ["魔血"])
         self.assertEqual(search_url("碎骨"), "https://poe2db.tw/cn/search?q=%E7%A2%8E%E9%AA%A8")
+        self.assertEqual(
+            search_url("Mageblood", "us"),
+            "https://poe2db.tw/us/search?q=Mageblood",
+        )
         self.assertTrue(Poe2DBClient._allowed("https://poe2db.tw/cn/Boneshatter"))
         self.assertTrue(Poe2DBClient._allowed("https://poe2db.tw/tw/Boneshatter"))
+        self.assertTrue(Poe2DBClient._allowed("https://poe2db.tw/us/Mageblood"))
         self.assertFalse(Poe2DBClient._allowed("https://example.com/tw/Boneshatter"))
         with self.assertRaises(ValueError):
             search_url("碎骨", "en")

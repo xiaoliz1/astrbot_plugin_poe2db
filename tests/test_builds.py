@@ -1,7 +1,9 @@
 """Tests for public poe.ninja Builds search links."""
 
+import base64
 import sys
 import unittest
+import zlib
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -13,6 +15,7 @@ from astrbot_plugin_poe2db.builds import (
     format_build_page_text,
     is_public_character_profile_url,
     normalize_visible_pob_code,
+    parse_pob_unique_items,
 )
 
 
@@ -153,6 +156,58 @@ class PublicBuildPageTextTests(unittest.TestCase):
         self.assertLessEqual(len(truncated), 600)
         self.assertIn("页面公开信息：", truncated)
         self.assertIn("装备物品悬停信息：", truncated)
+
+
+class PublicBuildUniqueItemTests(unittest.TestCase):
+    @staticmethod
+    def _share_code(xml: str) -> str:
+        return base64.urlsafe_b64encode(zlib.compress(xml.encode("utf-8"))).decode(
+            "ascii"
+        ).rstrip("=")
+
+    def test_reads_only_uniques_equipped_in_the_active_itemset_and_tree(self):
+        xml = """<PathOfBuilding2>
+          <Tree activeSpec="1"><Spec id="1"><Sockets>
+            <Socket nodeId="100" itemId="3" />
+          </Sockets></Spec><Spec id="2"><Sockets>
+            <Socket nodeId="200" itemId="5" />
+          </Sockets></Spec></Tree>
+          <Items activeItemSet="1">
+            <ItemSet id="1"><Slot name="Belt" itemId="1" /></ItemSet>
+            <ItemSet id="2"><Slot name="Weapon 1" itemId="4" /></ItemSet>
+            <Item id="1">Item Class: Belts
+Rarity: UNIQUE
+Mageblood
+Utility Belt</Item>
+            <Item id="3">Item Class: Jewels
+Rarity: UNIQUE
+Prism of Belief
+Diamond</Item>
+            <Item id="4">Item Class: Body Armours
+Rarity: UNIQUE
+Inactive Unique
+Leather Vest</Item>
+            <Item id="5">Item Class: Jewels
+Rarity: UNIQUE
+Inactive Jewel
+Diamond</Item>
+          </Items>
+        </PathOfBuilding2>"""
+
+        items = parse_pob_unique_items(self._share_code(xml))
+
+        self.assertEqual(
+            [(item.name, item.is_jewel) for item in items or []],
+            [("Mageblood", False), ("Prism of Belief", True)],
+        )
+
+    def test_distinguishes_valid_empty_build_from_invalid_export(self):
+        empty_xml = (
+            '<PathOfBuilding2><Items activeItemSet="1">'
+            '<ItemSet id="1" /></Items></PathOfBuilding2>'
+        )
+        self.assertEqual(parse_pob_unique_items(self._share_code(empty_xml)), [])
+        self.assertIsNone(parse_pob_unique_items("not-a-pob-code"))
 
 if __name__ == "__main__":
     unittest.main()

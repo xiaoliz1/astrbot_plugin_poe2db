@@ -8,7 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
@@ -16,10 +16,11 @@ from bs4 import BeautifulSoup
 BASE_URLS = {
     "cn": "https://poe2db.tw/cn/",
     "tw": "https://poe2db.tw/tw/",
+    "us": "https://poe2db.tw/us/",
 }
 PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.18.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.19.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 
 
 class Poe2DBError(RuntimeError):
@@ -32,6 +33,15 @@ class Source:
     url: str
     text: str
     image_url: str | None = None
+
+
+@dataclass(frozen=True)
+class MarketLink:
+    """A Poe2DB The Market link with its Chinese item-page title when known."""
+
+    item_name: str
+    chinese_name: str | None
+    url: str
 
 
 def search_url(term: str, locale: str = "cn") -> str:
@@ -148,7 +158,7 @@ class Poe2DBClient:
 
     def _download_sync(self, url: str) -> tuple[str, str]:
         if not self._allowed(url):
-            raise Poe2DBError("只允许读取 poe2db.tw/cn 或 /tw 页面")
+            raise Poe2DBError("只允许读取 poe2db.tw 的中文或英文资料页")
         request = Request(
             url,
             headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
@@ -191,6 +201,11 @@ class Poe2DBClient:
         return soup.title.get_text(" ", strip=True).split(" - ", 1)[0].strip()
 
     @staticmethod
+    def _article_heading(soup: BeautifulSoup) -> str:
+        heading = soup.select_one(".page-content h1, .page-content h2, .page-content h3")
+        return heading.get_text(" ", strip=True) if heading else ""
+
+    @staticmethod
     def _check_challenge(title: str) -> None:
         if title.casefold() in {"just a moment...", "attention required!"}:
             raise Poe2DBError("资料站点要求浏览器验证，暂时无法自动读取")
@@ -217,6 +232,136 @@ class Poe2DBClient:
             if url and url not in result:
                 result.append(url)
         return result[:6]
+
+    @staticmethod
+    def _trade_market_url(
+        url: str, item_name: str, league_name: str
+    ) -> str | None:
+        """Validate a Poe2DB Market link and point it at the current league."""
+        try:
+            parts = urlsplit(url)
+            port = parts.port
+        except ValueError:
+            return None
+        path_match = re.fullmatch(r"/trade2/search/poe2/([^/]+)", parts.path)
+        if (
+            parts.scheme != "https"
+            or parts.hostname != "www.pathofexile.com"
+            or port is not None
+            or parts.username is not None
+            or parts.password is not None
+            or not path_match
+            or not league_name.strip()
+            or len(league_name) > 100
+        ):
+            return None
+        encoded_query = parse_qs(parts.query).get("q", [])
+        if not encoded_query:
+            return None
+        try:
+            search_query = json.loads(encoded_query[0])
+        except (TypeError, ValueError):
+            return None
+        query_name = (
+            search_query.get("query", {}).get("name")
+            if isinstance(search_query, dict)
+            and isinstance(search_query.get("query"), dict)
+            else None
+        )
+        if not isinstance(query_name, str) or query_name.casefold() != item_name.casefold():
+            return None
+        current_league_path = quote(league_name.strip(), safe="")
+        return urlunsplit(
+            (
+                parts.scheme,
+                parts.netloc,
+                f"/trade2/search/poe2/{current_league_path}",
+                parts.query,
+                parts.fragment,
+            )
+        )
+
+    @classmethod
+    def _market_href_from_item_page(cls, soup: BeautifulSoup) -> str | None:
+        for row in soup.find_all("tr"):
+            cells = row.find_all(["th", "td"], recursive=False)
+            if not cells or cells[0].get_text(" ", strip=True).casefold() != "the market":
+                continue
+            for anchor in row.find_all("a", href=True):
+                if anchor.get_text(" ", strip=True).casefold() == "the market":
+                    return str(anchor["href"])
+        return None
+
+    async def find_unique_market_link(
+        self, item_name: str, league_name: str
+    ) -> MarketLink | None:
+        """Find an exact unique item in Poe2DB's US site and reuse its Market link."""
+        name = re.sub(r"\s+", " ", item_name).strip()
+        if not name or len(name) > 100 or "://" in name:
+            return None
+
+        query_url = search_url(name, "us")
+        try:
+            search_html = await self._fetch(query_url)
+            search_soup = BeautifulSoup(search_html, "html.parser")
+            search_title = self._title(search_soup)
+            self._check_challenge(search_title)
+            resolved_url = self._resolved_urls.get(query_url, query_url)
+
+            if search_title.casefold() == "search":
+                pages: list[tuple[str, BeautifulSoup]] = []
+                for candidate_url in self._result_urls(search_soup, query_url):
+                    try:
+                        article_html = await self._fetch(candidate_url)
+                    except Poe2DBError:
+                        continue
+                    pages.append(
+                        (
+                            self._resolved_urls.get(candidate_url, candidate_url),
+                            BeautifulSoup(article_html, "html.parser"),
+                        )
+                    )
+            else:
+                pages = [(resolved_url, search_soup)]
+
+            for article_url, article_soup in pages:
+                self._check_challenge(self._title(article_soup))
+                if self._article_heading(article_soup).casefold() != name.casefold():
+                    continue
+                market_href = self._market_href_from_item_page(article_soup)
+                if not market_href:
+                    continue
+                market_url = self._trade_market_url(
+                    urljoin(article_url, market_href), name, league_name
+                )
+                if not market_url:
+                    continue
+
+                chinese_name = await self._chinese_title_for_us_article(article_url)
+                return MarketLink(name, chinese_name, market_url)
+        except Poe2DBError:
+            return None
+        return None
+
+    async def _chinese_title_for_us_article(self, article_url: str) -> str | None:
+        parts = urlsplit(article_url)
+        if (
+            parts.scheme != "https"
+            or parts.hostname != "poe2db.tw"
+            or not parts.path.startswith("/us/")
+            or parts.path.count("/") != 2
+        ):
+            return None
+        chinese_url = urlunsplit(
+            (parts.scheme, parts.netloc, "/cn/" + parts.path[len("/us/") :], "", "")
+        )
+        try:
+            soup = BeautifulSoup(await self._fetch(chinese_url), "html.parser")
+        except Poe2DBError:
+            return None
+        self._check_challenge(self._title(soup))
+        title = self._article_heading(soup)
+        return title or None
 
     @classmethod
     def _canonical_url(cls, soup: BeautifulSoup, title: str, fallback: str) -> str:
