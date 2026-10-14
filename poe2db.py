@@ -20,7 +20,7 @@ BASE_URLS = {
 }
 PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.20.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.21.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 
 
 class Poe2DBError(RuntimeError):
@@ -283,21 +283,64 @@ class Poe2DBClient:
 
     @classmethod
     def _market_href_from_item_page(cls, soup: BeautifulSoup) -> str | None:
+        market_labels = {"the market", "市集", "市場"}
         for row in soup.find_all("tr"):
             cells = row.find_all(["th", "td"], recursive=False)
-            if not cells or cells[0].get_text(" ", strip=True).casefold() != "the market":
+            if not cells or cells[0].get_text(" ", strip=True).casefold() not in market_labels:
                 continue
             for anchor in row.find_all("a", href=True):
-                if anchor.get_text(" ", strip=True).casefold() == "the market":
+                if anchor.get_text(" ", strip=True).casefold() in market_labels:
                     return str(anchor["href"])
         return None
 
+    @staticmethod
+    def _china_trade_market_url(url: str, item_name: str) -> str | None:
+        """Validate and preserve a national-market link from a Poe2DB /cn page."""
+        try:
+            parts = urlsplit(url)
+            port = parts.port
+        except ValueError:
+            return None
+        path_match = re.fullmatch(r"/trade2/search/poe2/([^/]+)", parts.path)
+        if (
+            parts.scheme != "https"
+            or parts.hostname != "poe.game.qq.com"
+            or port is not None
+            or parts.username is not None
+            or parts.password is not None
+            or not path_match
+            or not path_match.group(1)
+            or len(path_match.group(1)) > 120
+        ):
+            return None
+        encoded_query = parse_qs(parts.query).get("q", [])
+        if not encoded_query:
+            return None
+        try:
+            search_query = json.loads(encoded_query[0])
+        except (TypeError, ValueError):
+            return None
+        query_name = (
+            search_query.get("query", {}).get("name")
+            if isinstance(search_query, dict)
+            and isinstance(search_query.get("query"), dict)
+            else None
+        )
+        if not isinstance(query_name, str) or query_name.casefold() != item_name.casefold():
+            return None
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+
     async def find_unique_market_link(
-        self, item_name: str, league_name: str
+        self, item_name: str, league_name: str, locale: str = "us"
     ) -> MarketLink | None:
-        """Find an exact unique item in Poe2DB's US site and reuse its Market link."""
+        """Find an exact unique item's market link from its requested Poe2DB locale.
+
+        National-market URLs are read from the matching Simplified Chinese
+        article and keep that article's own league path. International URLs
+        continue to use the current poe.ninja league name.
+        """
         name = re.sub(r"\s+", " ", item_name).strip()
-        if not name or len(name) > 100 or "://" in name:
+        if not name or len(name) > 100 or "://" in name or locale not in {"us", "cn"}:
             return None
 
         query_url = search_url(name, "us")
@@ -328,6 +371,22 @@ class Poe2DBClient:
                 self._check_challenge(self._title(article_soup))
                 if self._article_heading(article_soup).casefold() != name.casefold():
                     continue
+
+                if locale == "cn":
+                    chinese_article = await self._chinese_article_for_us_article(article_url)
+                    if not chinese_article:
+                        continue
+                    chinese_url, chinese_soup, chinese_name = chinese_article
+                    market_href = self._market_href_from_item_page(chinese_soup)
+                    if not market_href:
+                        continue
+                    market_url = self._china_trade_market_url(
+                        urljoin(chinese_url, market_href), chinese_name
+                    )
+                    if market_url:
+                        return MarketLink(name, chinese_name, market_url)
+                    continue
+
                 market_href = self._market_href_from_item_page(article_soup)
                 if not market_href:
                     continue
@@ -336,7 +395,6 @@ class Poe2DBClient:
                 )
                 if not market_url:
                     continue
-
                 chinese_name = await self._chinese_title_for_us_article(article_url)
                 return MarketLink(name, chinese_name, market_url)
         except Poe2DBError:
@@ -344,6 +402,12 @@ class Poe2DBClient:
         return None
 
     async def _chinese_title_for_us_article(self, article_url: str) -> str | None:
+        article = await self._chinese_article_for_us_article(article_url)
+        return article[2] if article else None
+
+    async def _chinese_article_for_us_article(
+        self, article_url: str
+    ) -> tuple[str, BeautifulSoup, str] | None:
         parts = urlsplit(article_url)
         if (
             parts.scheme != "https"
@@ -361,7 +425,8 @@ class Poe2DBClient:
             return None
         self._check_challenge(self._title(soup))
         title = self._article_heading(soup)
-        return title or None
+        resolved_url = self._resolved_urls.get(chinese_url, chinese_url)
+        return (resolved_url, soup, title) if title else None
 
     @classmethod
     def _canonical_url(cls, soup: BeautifulSoup, title: str, fallback: str) -> str:

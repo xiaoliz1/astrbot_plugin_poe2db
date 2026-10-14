@@ -50,6 +50,17 @@ class Poe2DBPobShareTests(unittest.TestCase):
         self.assertIn("Poe2DB 简体中文 Build：", text)
         self.assertIn("https://poe2db.tw/cn/pob", text)
 
+    def test_formats_wegame_source_link_without_calling_it_a_character_detail(self):
+        text = format_character_build_links(
+            "https://www.wegame.com.cn/helper/poe2/#/share/abc123456789012345",
+            "https://poe2db.tw/cn/pob/AbCdEf123456",
+            "WeGame 构筑来源",
+        )
+
+        self.assertIn("WeGame 构筑来源：", text)
+        self.assertNotIn("角色详情：", text)
+        self.assertIn("Poe2DB 简体中文 Build：", text)
+
     def test_extracts_account_and_character_from_detail_path(self):
         account, character = character_identity_from_profile_url(
             "https://poe.ninja/poe2/builds/forbiddenrites/character/"

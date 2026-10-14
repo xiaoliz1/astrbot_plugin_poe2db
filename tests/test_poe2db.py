@@ -1,8 +1,10 @@
 """Focused tests for site result parsing and source boundaries."""
 
+import json
 import sys
 import unittest
 from pathlib import Path
+from urllib.parse import quote
 
 from bs4 import BeautifulSoup
 
@@ -235,6 +237,67 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
             "https://www.pathofexile.com/trade2/search/poe2/Forbidden%20Rites"
             "?q=%7B%22query%22%3A%7B%22name%22%3A%22Mageblood%22%7D%7D",
         )
+
+    async def test_national_market_link_comes_from_the_chinese_article(self):
+        item_name = "Mageblood"
+        query_url = search_url(item_name, "us")
+        us_url = "https://poe2db.tw/us/Mageblood"
+        cn_url = "https://poe2db.tw/cn/Mageblood"
+        cn_trade_url = (
+            "https://poe.game.qq.com/trade2/search/poe2/%E5%A5%A5%E6%9D%9C%E5%B0%94%E7%A7%98%E7%AC%A6"
+            "?q="
+            + quote(
+                json.dumps(
+                    {"query": {"name": "法师之血"}},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                safe="",
+            )
+        )
+        pages = {
+            query_url: """<html><head><title>Mageblood Utility Belt - Poe2DB</title></head>
+              <body><div class="page-content"><h3>Mageblood</h3></div></body></html>""",
+            cn_url: f"""<html><head><title>法师之血 万用腰带 - Poe2DB</title></head>
+              <body><div class="page-content"><h3>法师之血</h3>
+                <table><tr><td>市集</td><td><a href="{cn_trade_url}">市集</a></td></tr></table>
+              </div></body></html>""",
+        }
+        client = FixtureClient(pages)
+        client._resolved_urls[query_url] = us_url
+
+        result = await client.find_unique_market_link(
+            item_name, "Forbidden Rites", locale="cn"
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.chinese_name, "法师之血")
+        self.assertEqual(result.url, cn_trade_url)
+
+    async def test_national_market_lookup_does_not_fall_back_to_international_market(self):
+        item_name = "Mageblood"
+        query_url = search_url(item_name, "us")
+        us_url = "https://poe2db.tw/us/Mageblood"
+        intl_market_url = (
+            "https://www.pathofexile.com/trade2/search/poe2/Forbidden%20Rites"
+            "?q=%7B%22query%22%3A%7B%22name%22%3A%22Mageblood%22%7D%7D"
+        )
+        pages = {
+            query_url: f"""<html><head><title>Mageblood Utility Belt - Poe2DB</title></head>
+              <body><div class="page-content"><h3>Mageblood</h3>
+                <table><tr><td>The Market</td><td><a href="{intl_market_url}">The Market</a></td></tr></table>
+              </div></body></html>""",
+            "https://poe2db.tw/cn/Mageblood": """<html><head><title>法师之血 - Poe2DB</title></head>
+              <body><div class="page-content"><h3>法师之血</h3></div></body></html>""",
+        }
+        client = FixtureClient(pages)
+        client._resolved_urls[query_url] = us_url
+
+        result = await client.find_unique_market_link(
+            item_name, "Forbidden Rites", locale="cn"
+        )
+
+        self.assertIsNone(result)
 
     async def test_market_link_search_requires_exact_article_and_item_filter(self):
         item_name = "Mageblood"

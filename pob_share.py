@@ -21,9 +21,13 @@ _POB_CODE_RE = re.compile(r"^[A-Za-z0-9_+/=-]{80,1000000}$")
 _SHARE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 
 
-def format_character_build_links(profile_url: str, share_url: str | None) -> str:
-    """Format the public character link followed by its Chinese PoB share page."""
-    result = f"角色详情：{profile_url}\nPoe2DB 简体中文 Build："
+def format_character_build_links(
+    profile_url: str,
+    share_url: str | None,
+    source_label: str = "角色详情",
+) -> str:
+    """Format a build source link followed by its Chinese PoB share page."""
+    result = f"{source_label}：{profile_url}\nPoe2DB 简体中文 Build："
     if share_url:
         return f"{result}\n{share_url}"
     return (
@@ -210,7 +214,7 @@ class Poe2DBPobClient:
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
                 "User-Agent": (
-                    "astrbot_plugin_poe2db/1.20.0 "
+                    "astrbot_plugin_poe2db/1.21.0 "
                     "(https://github.com/xiaoliz1/astrbot_plugin_poe2db; "
                     "contact: https://github.com/xiaoliz1/astrbot_plugin_poe2db/issues)"
                 ),
