@@ -111,6 +111,7 @@ class WeGameBuildCodeResolver:
                     "WeGame to PoB2 conversion through PoBR failed during %s (%s)",
                     stage,
                     type(exc).__name__,
+                    exc_info=True,
                 )
                 if stage == "启动 Chromium":
                     if isinstance(exc, ModuleNotFoundError) and exc.name == "playwright":
