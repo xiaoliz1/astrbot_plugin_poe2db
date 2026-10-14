@@ -8,9 +8,10 @@ from typing import Literal
 from urllib.parse import unquote, urlsplit
 
 
-AnalysisInputKind = Literal["character", "poe_ninja", "wegame"]
+AnalysisInputKind = Literal["character", "poe_ninja", "poe_ninja_pob", "wegame"]
 _WegameShareCode = re.compile(r"^[A-Za-z0-9_-]{16,256}$")
 _PoeNinjaLeagueSlug = re.compile(r"^[a-z0-9]+$")
+_PoeNinjaPobId = re.compile(r"^[A-Za-z0-9_-]{3,64}$")
 
 
 @dataclass(frozen=True)
@@ -19,13 +20,14 @@ class AnalysisInput:
     value: str
     character_name: str | None = None
     league_slug: str | None = None
+    pob_id: str | None = None
 
 
 def classify_analysis_input(value: str) -> AnalysisInput:
-    """Classify a character name, poe.ninja detail URL, or WeGame share URL."""
+    """Classify a character name, poe.ninja profile/PoB URL, or WeGame share URL."""
     text = value.strip()
     if not text:
-        raise ValueError("请提供角色名、poe.ninja 详情页或 WeGame 分享链接。")
+        raise ValueError("请提供角色名、poe.ninja 角色详情/PoB 分享链接或 WeGame 分享链接。")
     if len(text) > 4096:
         raise ValueError("输入内容过长，请检查角色名或分享链接。")
 
@@ -49,6 +51,16 @@ def classify_analysis_input(value: str) -> AnalysisInput:
 
     if parts.hostname == "poe.ninja":
         path_parts = parts.path.strip("/").split("/")
+        if (
+            len(path_parts) == 3
+            and path_parts[:2] == ["poe2", "pob"]
+            and _PoeNinjaPobId.fullmatch(path_parts[2])
+        ):
+            return AnalysisInput(
+                kind="poe_ninja_pob",
+                value=parts.geturl(),
+                pob_id=path_parts[2],
+            )
         if (
             len(path_parts) != 6
             or path_parts[0:2] != ["poe2", "builds"]

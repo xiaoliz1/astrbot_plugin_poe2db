@@ -37,6 +37,13 @@ class AnalysisInputTests(unittest.TestCase):
 
         self.assertEqual(parsed.character_name, "九球天后莉莉丝")
 
+    def test_extracts_id_from_a_poe_ninja_pob_share_link(self):
+        parsed = classify_analysis_input("https://poe.ninja/poe2/pob/2b2ef")
+
+        self.assertEqual(parsed.kind, "poe_ninja_pob")
+        self.assertEqual(parsed.pob_id, "2b2ef")
+        self.assertEqual(parsed.value, "https://poe.ninja/poe2/pob/2b2ef")
+
     def test_extracts_wegame_share_token_from_fragment_url(self):
         url = (
             "https://www.wegame.com.cn/helper/poe2/#/share/"
@@ -54,6 +61,8 @@ class AnalysisInputTests(unittest.TestCase):
     def test_rejects_non_detail_poe_ninja_and_unsafe_hosts(self):
         for url in (
             "https://poe.ninja/poe2/builds/forbiddenrites?search=name%3Dabc",
+            "https://poe.ninja/poe2/pob/../raw/2b2ef",
+            "https://poe.ninja.evil/poe2/pob/2b2ef",
             "https://example.com/poe2/builds/forbiddenrites/character/a/b",
             "http://poe.ninja/poe2/builds/forbiddenrites/character/a/b",
             "https://user@poe.ninja/poe2/builds/forbiddenrites/character/a/b",
