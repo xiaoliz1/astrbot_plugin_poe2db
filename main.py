@@ -543,6 +543,7 @@ class Poe2DBPlugin(Star):
                     .file_image(international_image)
                     .message("\n国服：")
                     .file_image(national_image)
+                    .message("\n\n查询物价：\n/poe2 国际服物价\n/poe2 国服物价")
                 )
                 sent = await self.context.send_message(destination, message)
                 if not sent:
