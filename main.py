@@ -56,6 +56,7 @@ from .pob_share import (
     import_pob_from_tool,
 )
 from .poe_ninja_pob import PoeNinjaPobError, PoeNinjaPobResolver
+from .poe_ninja_card import PoeNinjaCardResolver
 from .price_schedule import (
     next_hourly_price_refresh_at,
     next_price_refresh_at,
@@ -159,7 +160,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.21.5",
+    "1.22.8",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -174,6 +175,7 @@ class Poe2DBPlugin(Star):
         self.national_economy = PoECurrencyClient(timeout)
         self.builds_resolver = PoeNinjaBuildsResolver(timeout)
         self.poe_ninja_pob_resolver = PoeNinjaPobResolver(timeout)
+        self.poe_ninja_card_resolver = PoeNinjaCardResolver(timeout)
         self.wegame_build_resolver = WeGameBuildCodeResolver(timeout)
         self._price_snapshots: dict[str, CurrencySnapshot] = {}
         data_dir = StarTools.get_data_dir("astrbot_plugin_poe2db")
@@ -931,6 +933,9 @@ class Poe2DBPlugin(Star):
             suffix += f"\nPoe2DB 资料来源：\n{references}"
         suffix += "\n\n" + self._format_analysis_market_links(market_link_results)
         yield event.plain_result(chinese_analysis + suffix)
+        card_url = await self.poe_ninja_card_resolver.resolve(source_url)
+        if card_url:
+            yield event.image_result(card_url)
 
     async def _read_analysis_build_data(
         self, profile_url: str, league_name: str
