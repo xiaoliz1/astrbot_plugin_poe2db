@@ -17,8 +17,10 @@ _RESULTS_TIMEOUT_MS = 20_000
 _SUCCESS_CACHE_SECONDS = 300
 _EMPTY_CACHE_SECONDS = 45
 _PROFILE_CACHE_SECONDS = 300
+_POB_CODE_CACHE_SECONDS = 300
 _PROFILE_TEXT_LIMIT = 12_000
 _MAX_EQUIPMENT_TOOLTIPS = 36
+_POB_CODE_SELECTOR = 'input[aria-label*="Import code for Path of Building" i]'
 
 
 def _league_slug(league_name: str) -> str:
@@ -109,6 +111,16 @@ def is_public_character_profile_url(profile_url: str, league_name: str) -> bool:
     )
 
 
+def normalize_visible_pob_code(value: str) -> str | None:
+    """Validate a PoB share code read from poe.ninja's rendered public page."""
+    if not isinstance(value, str):
+        return None
+    code = "".join(value.split()).strip("`")
+    if not re.fullmatch(r"[A-Za-z0-9_+/=-]{80,1000000}", code):
+        return None
+    return code
+
+
 def format_build_page_text(
     page_text: str,
     equipment_tooltips: Iterable[str],
@@ -164,6 +176,7 @@ class PoeNinjaBuildsResolver:
         self._lock = asyncio.Lock()
         self._cache: dict[tuple[str, str], tuple[float, str | None]] = {}
         self._profile_cache: dict[str, tuple[float, str | None]] = {}
+        self._pob_code_cache: dict[str, tuple[float, str | None]] = {}
 
     async def resolve_character_url(
         self, character_name: str, league_name: str
@@ -241,6 +254,71 @@ class PoeNinjaBuildsResolver:
                         await context.close()
                     except Exception:
                         LOGGER.debug("Unable to close poe.ninja browser context", exc_info=True)
+
+    async def read_character_pob_code(
+        self, profile_url: str, league_name: str
+    ) -> str | None:
+        """Read the visible PoB import code from a public character page."""
+        if not is_public_character_profile_url(profile_url, league_name):
+            return None
+
+        cache_key = urlsplit(profile_url).geturl()
+        now = time.monotonic()
+        async with self._lock:
+            cached = self._pob_code_cache.get(cache_key)
+            if cached and cached[0] > now:
+                return cached[1]
+            if cached:
+                self._pob_code_cache.pop(cache_key, None)
+
+            context = None
+            try:
+                browser = await self._get_browser()
+                context = await browser.new_context(locale="en-US")
+                page = await context.new_page()
+                await page.route("**/*", self._route_public_page)
+                page.set_default_timeout(self.timeout_ms)
+                await page.goto(
+                    profile_url,
+                    wait_until="domcontentloaded",
+                    timeout=self.timeout_ms,
+                )
+                await page.wait_for_function(
+                    """selector => {
+                        const input = document.querySelector(selector);
+                        return Boolean(input && input.value && input.value.length >= 80);
+                    }""",
+                    arg=_POB_CODE_SELECTOR,
+                    timeout=self.timeout_ms,
+                )
+                raw_code = await page.locator(_POB_CODE_SELECTOR).input_value()
+                code = normalize_visible_pob_code(raw_code)
+                self._pob_code_cache[cache_key] = (
+                    time.monotonic()
+                    + (_POB_CODE_CACHE_SECONDS if code else _EMPTY_CACHE_SECONDS),
+                    code,
+                )
+                self._trim_pob_code_cache()
+                return code
+            except Exception as exc:
+                LOGGER.warning(
+                    "Unable to read visible PoB code from poe.ninja profile (%s)",
+                    type(exc).__name__,
+                )
+                self._pob_code_cache[cache_key] = (
+                    time.monotonic() + _EMPTY_CACHE_SECONDS,
+                    None,
+                )
+                self._trim_pob_code_cache()
+                return None
+            finally:
+                if context is not None:
+                    try:
+                        await context.close()
+                    except Exception:
+                        LOGGER.debug(
+                            "Unable to close poe.ninja PoB context", exc_info=True
+                        )
 
     async def read_character_build_text(
         self, profile_url: str, league_name: str
@@ -423,3 +501,11 @@ class PoeNinjaBuildsResolver:
                 self._profile_cache.pop(key, None)
         while len(self._profile_cache) > 64:
             self._profile_cache.pop(next(iter(self._profile_cache)))
+
+    def _trim_pob_code_cache(self) -> None:
+        now = time.monotonic()
+        for key, (expires, _) in list(self._pob_code_cache.items()):
+            if expires <= now:
+                self._pob_code_cache.pop(key, None)
+        while len(self._pob_code_cache) > 16:
+            self._pob_code_cache.pop(next(iter(self._pob_code_cache)))

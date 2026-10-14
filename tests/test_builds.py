@@ -12,6 +12,7 @@ from astrbot_plugin_poe2db.builds import (
     character_search_page_url,
     format_build_page_text,
     is_public_character_profile_url,
+    normalize_visible_pob_code,
 )
 
 
@@ -103,6 +104,15 @@ class CharacterSearchUrlTests(unittest.TestCase):
 
 
 class PublicBuildPageTextTests(unittest.TestCase):
+    def test_normalizes_visible_poe2_ninja_pob_import_code(self):
+        code = "A" * 120 + "_/+=="
+
+        self.assertEqual(
+            normalize_visible_pob_code(f"  {code[:60]}\n{code[60:]}  "), code
+        )
+        self.assertIsNone(normalize_visible_pob_code("too short"))
+        self.assertIsNone(normalize_visible_pob_code("A" * 100 + "#"))
+
     def test_accepts_only_https_profile_pages_for_the_requested_league(self):
         profile_url = (
             "https://poe.ninja/poe2/builds/forbiddenrites/character/"
