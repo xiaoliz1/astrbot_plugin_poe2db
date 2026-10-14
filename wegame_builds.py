@@ -1,34 +1,97 @@
-"""Convert public WeGame PoE2 share links to PoB2 codes through PoBR."""
+"""Resolve public WeGame PoE2 shares through Poe2DB's Chinese account page."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import re
-from typing import Any
-from urllib.parse import urlsplit
+from html.parser import HTMLParser
+from urllib.error import HTTPError, URLError
+from urllib.parse import unquote, urlencode, urljoin, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .analysis_input import classify_analysis_input
+from .analysis_input import classify_analysis_input, wegame_share_code_from_url
 from .builds import normalize_visible_pob_code
 
 LOGGER = logging.getLogger(__name__)
-POBR_WEB_URL = "https://pobr-web.pages.dev/"
-_POBR_HOST = "pobr-web.pages.dev"
-_DEFAULT_TIMEOUT_MS = 45_000
+POE2DB_ACCOUNT_URL = "https://poe2db.tw/cn/account"
+POE2DB_SHARE_API_URL = "https://poe2db.tw/api/requestShareCode"
+_POE2DB_HOST = "poe2db.tw"
+_MAX_API_RESPONSE_BYTES = 128_000
+_MAX_BUILD_PAGE_BYTES = 5_000_000
 
 
 class WeGameBuildError(RuntimeError):
-    """A public WeGame share could not be converted to a PoB2 build."""
+    """A public WeGame share could not be resolved to a PoB2 build."""
+
+
+class _PoBCodeParser(HTMLParser):
+    """Extract the PoB code input from a Poe2DB build page."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.value = ""
+
+    def handle_starttag(self, tag, attrs):
+        if tag.casefold() != "input":
+            return
+        attributes = dict(attrs)
+        if attributes.get("id") == "pobCode":
+            self.value = attributes.get("value", "") or ""
+
+
+def _is_poe2db_https_url(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except (AttributeError, ValueError):
+        return False
+    return (
+        parts.scheme == "https"
+        and parts.hostname == _POE2DB_HOST
+        and port in (None, 443)
+        and parts.username is None
+        and parts.password is None
+    )
+
+
+def _poe2db_detail_url(location: str) -> str:
+    """Resolve Poe2DB's API location while keeping navigation on its CN pages."""
+    raw_location = location.strip()
+    if (
+        not raw_location
+        or "\\" in raw_location
+        or any(ord(char) < 32 for char in raw_location)
+    ):
+        raise WeGameBuildError("Poe2DB 分享接口返回了无效的构筑页面地址。")
+
+    detail_url = urljoin(POE2DB_ACCOUNT_URL, raw_location)
+    parts = urlsplit(detail_url)
+    decoded_segments = unquote(parts.path).split("/")
+    if (
+        not _is_poe2db_https_url(detail_url)
+        or not parts.path.startswith("/cn/")
+        or parts.fragment
+        or any(segment in {".", ".."} for segment in decoded_segments)
+    ):
+        raise WeGameBuildError("Poe2DB 分享接口返回了站点范围以外的页面地址。")
+    return detail_url
+
+
+class _Poe2DBRedirectHandler(HTTPRedirectHandler):
+    """Follow Poe2DB redirects only when they remain on its HTTPS origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _is_poe2db_https_url(newurl):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class WeGameBuildCodeResolver:
-    """Use PoBR's public importer and browser-side exporter in an isolated context."""
+    """Read a WeGame share code from Poe2DB and return its PoB2 import code."""
 
     def __init__(self, timeout_seconds: int = 15):
-        self.timeout_ms = max(_DEFAULT_TIMEOUT_MS, min(int(timeout_seconds) * 2_000, 60_000))
-        self._playwright: Any | None = None
-        self._browser: Any | None = None
-        self._lock = asyncio.Lock()
+        self.timeout_seconds = max(5, min(int(timeout_seconds), 30))
 
     async def convert(self, share_url: str) -> str:
         try:
@@ -38,118 +101,78 @@ class WeGameBuildCodeResolver:
         if parsed.kind != "wegame":
             raise WeGameBuildError("请提供有效的 WeGame 分享链接。")
 
-        async with self._lock:
-            context = None
-            try:
-                browser = await self._get_browser()
-                context = await browser.new_context(locale="en-US")
-                page = await context.new_page()
-                page.set_default_timeout(self.timeout_ms)
-                await page.route("**/*", self._route_pobr_page)
-                await page.goto(
-                    POBR_WEB_URL,
-                    wait_until="domcontentloaded",
-                    timeout=self.timeout_ms,
-                )
-
-                dismiss = page.get_by_role("button", name=re.compile(r"^got it$", re.I))
-                if await dismiss.count() and await dismiss.first.is_visible():
-                    await dismiss.first.click()
-
-                input_box = page.locator("textarea.import-code").first
-                await input_box.wait_for(state="visible")
-                await input_box.fill(parsed.value)
-
-                import_button = page.get_by_role(
-                    "button", name=re.compile(r"import as new build", re.I)
-                )
-                await import_button.wait_for(state="visible")
-                await import_button.click()
-                await page.locator(".import-summary").wait_for(state="visible")
-
-                generate_button = page.get_by_role(
-                    "button", name=re.compile(r"generate share code", re.I)
-                )
-                await generate_button.wait_for(state="visible")
-                await generate_button.click()
-
-                await page.wait_for_function(
-                    """() => Array.from(document.querySelectorAll('textarea'))
-                        .some((node) => /^[A-Za-z0-9_+/=-]{80,1000000}$/
-                            .test((node.value || '').replace(/\\s+/g, '')))""",
-                    timeout=self.timeout_ms,
-                )
-                raw_codes = await page.locator("textarea").evaluate_all(
-                    "nodes => nodes.map(node => node.value || '')"
-                )
-                for raw_code in reversed(raw_codes):
-                    code = normalize_visible_pob_code(raw_code)
-                    if code:
-                        return code
-                raise WeGameBuildError("PoBR 页面没有生成有效的 PoB2 导入码。")
-            except WeGameBuildError:
-                raise
-            except Exception as exc:
-                LOGGER.warning(
-                    "WeGame to PoB2 conversion through PoBR failed (%s)",
-                    type(exc).__name__,
-                )
-                raise WeGameBuildError(
-                    "PoBR 转换页面没有完成导入。请确认 Chromium 已安装、网络可访问 PoBR/WeGame，"
-                    "并检查 WeGame 分享链接是否仍有效。"
-                ) from exc
-            finally:
-                if context is not None:
-                    try:
-                        await context.close()
-                    except Exception:
-                        LOGGER.debug("Unable to close PoBR browser context", exc_info=True)
-
-    async def close(self) -> None:
-        async with self._lock:
-            browser, playwright = self._browser, self._playwright
-            self._browser = None
-            self._playwright = None
-            if browser is not None:
-                try:
-                    await browser.close()
-                except Exception:
-                    LOGGER.debug("Unable to close PoBR browser", exc_info=True)
-            if playwright is not None:
-                try:
-                    await playwright.stop()
-                except Exception:
-                    LOGGER.debug("Unable to stop PoBR Playwright", exc_info=True)
-
-    async def _get_browser(self):
-        if self._browser is not None and self._browser.is_connected():
-            return self._browser
-        if self._playwright is not None:
-            try:
-                await self._playwright.stop()
-            except Exception:
-                pass
-        self._browser = None
-        self._playwright = None
-
-        from playwright.async_api import async_playwright
-
-        self._playwright = await async_playwright().start()
+        share_code = wegame_share_code_from_url(parsed.value)
         try:
-            self._browser = await self._playwright.chromium.launch(headless=True)
-        except Exception:
-            await self._playwright.stop()
-            self._playwright = None
+            return await asyncio.to_thread(self._resolve_sync, share_code)
+        except WeGameBuildError:
             raise
-        return self._browser
+        except HTTPError as exc:
+            raise WeGameBuildError(f"Poe2DB 返回 HTTP {exc.code}，暂时无法读取构筑。") from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise WeGameBuildError("无法连接 Poe2DB 分享接口或读取构筑页面，请稍后重试。") from exc
+        except Exception as exc:
+            LOGGER.warning(
+                "WeGame share resolution through Poe2DB failed (%s)",
+                type(exc).__name__,
+            )
+            raise WeGameBuildError("Poe2DB 没有返回可用的 PoB2 构筑数据。") from exc
 
-    @staticmethod
-    async def _route_pobr_page(route) -> None:
-        request = route.request
-        parts = urlsplit(request.url)
-        if parts.scheme != "https" or parts.hostname != _POBR_HOST:
-            await route.abort()
-        elif request.resource_type in {"image", "font", "media"}:
-            await route.abort()
-        else:
-            await route.continue_()
+    def _resolve_sync(self, share_code: str) -> str:
+        opener = build_opener(_Poe2DBRedirectHandler())
+        api_url = f"{POE2DB_SHARE_API_URL}?{urlencode({'share_code': share_code})}"
+        api_request = Request(
+            api_url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "AstrBot-PoE2DB/1.21.5 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)",
+            },
+        )
+        api_body = self._read_response(
+            opener,
+            api_request,
+            max_bytes=_MAX_API_RESPONSE_BYTES,
+        )
+        try:
+            payload = json.loads(api_body.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WeGameBuildError("Poe2DB 分享接口返回了无法识别的数据。") from exc
+        if not isinstance(payload, dict) or payload.get("code") != 200:
+            raise WeGameBuildError("Poe2DB 没有找到这条 WeGame 分享构筑，请确认链接仍有效。")
+        location = payload.get("location")
+        if not isinstance(location, str):
+            raise WeGameBuildError("Poe2DB 分享接口没有返回构筑页面地址。")
+
+        detail_url = _poe2db_detail_url(location)
+        page_request = Request(
+            detail_url,
+            headers={
+                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": "AstrBot-PoE2DB/1.21.5 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)",
+            },
+        )
+        page_body = self._read_response(
+            opener,
+            page_request,
+            max_bytes=_MAX_BUILD_PAGE_BYTES,
+        )
+        parser = _PoBCodeParser()
+        parser.feed(page_body.decode("utf-8", errors="replace"))
+        parser.close()
+        code = normalize_visible_pob_code(parser.value)
+        if not code:
+            raise WeGameBuildError(
+                "Poe2DB 中文构筑页没有包含有效的 PoB2 导入码，分享数据可能不完整。"
+            )
+        return code
+
+    def _read_response(self, opener, request: Request, max_bytes: int) -> bytes:
+        with opener.open(request, timeout=self.timeout_seconds) as response:
+            if not _is_poe2db_https_url(response.geturl()):
+                raise WeGameBuildError("Poe2DB 请求跳转到了不受支持的站点。")
+            status = getattr(response, "status", 200)
+            if status != 200:
+                raise WeGameBuildError(f"Poe2DB 返回 HTTP {status}。")
+            body = response.read(max_bytes + 1)
+        if len(body) > max_bytes:
+            raise WeGameBuildError("Poe2DB 返回的构筑数据过大，已停止读取。")
+        return body

@@ -157,7 +157,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.21.0",
+    "1.21.5",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -216,7 +216,6 @@ class Poe2DBPlugin(Star):
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         await self.builds_resolver.close()
-        await self.wegame_build_resolver.close()
 
     def _price_local_timestamp(self) -> str:
         offset_hours = normalize_utc_offset_hours(

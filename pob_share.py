@@ -214,7 +214,7 @@ class Poe2DBPobClient:
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
                 "User-Agent": (
-                    "astrbot_plugin_poe2db/1.21.0 "
+                    "astrbot_plugin_poe2db/1.21.5 "
                     "(https://github.com/xiaoliz1/astrbot_plugin_poe2db; "
                     "contact: https://github.com/xiaoliz1/astrbot_plugin_poe2db/issues)"
                 ),

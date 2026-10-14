@@ -11,15 +11,15 @@ cd AstrBot/data/plugins
 git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 ```
 
-插件代码需要 Python 3.10 或更新版本以及 AstrBot 4.24.2 或更新版本。AstrBot 会按 `requirements.txt` 安装所需 Python 包。为了让插件搜索 poe.ninja 公开 Builds 页面，并把 WeGame 分享链接转换成 PoB2 构筑，还需在运行 AstrBot 的同一 Python 环境安装 Chromium：
+插件代码需要 Python 3.10 或更新版本以及 AstrBot 4.24.2 或更新版本。AstrBot 会按 `requirements.txt` 安装所需 Python 包。为了让插件读取 poe.ninja 公开 Builds 页面，还需在运行 AstrBot 的同一 Python 环境安装 Chromium：
 
 ```bash
 python -m playwright install chromium
 ```
 
-若未安装 Chromium、页面加载失败或角色名无法唯一匹配，命令会回退到角色筛选页链接。
+Chromium 仅用于 poe.ninja 的公开 Builds 页面读取；WeGame 分享通过 Poe2DB 接口解析，不需要 Chromium。若未安装 Chromium、页面加载失败或角色名无法唯一匹配，命令会回退到角色筛选页链接。
 
-已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.21.0`。
+已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.21.5`。
 
 ## 使用
 
@@ -69,7 +69,7 @@ python -m playwright install chromium
 
 `/poe2分析 角色名` 会在 poe.ninja 当前赛季搜索角色；也可以直接发送 poe.ninja 的 Builds 角色详情页链接。两种方式都会把公开构筑交给 `poe2-mcp` 分析，并尝试对比天梯构筑。
 
-`/poe2分析 https://www.wegame.com.cn/helper/poe2/#/share/分享码` 会通过 PoBR 的公开导入页面读取分享数据，在隔离的 Chromium 页面中转换为 PoB2 导入码，再生成 Poe2DB 简体中文 Build 分享页并交给 `poe2-mcp` 的 `import_pob` 工具分析。转换依赖 AstrBot 可访问 PoBR 和 WeGame，并已安装 Chromium。分享内容是公开链接；插件不要求 WeGame 账号或密码。PoBR 的导入服务会清理账号标识后再返回构筑数据。WeGame 分享不包含 poe.ninja 角色账号，所以不能比较这个角色本人的天梯记录；只有 MCP 工具返回了可验证的职业或技能构筑对比数据时才会报告相关比较。
+`/poe2分析 https://www.wegame.com.cn/helper/poe2/#/share/分享码` 会把分享码提交到 Poe2DB 的公开接口，跟随接口返回的简体中文构筑页并读取 `PoB Code`，再生成 Poe2DB 简体中文 Build 分享页并交给 `poe2-mcp` 的 `import_pob` 工具分析。此流程不使用 PoBR，也不需要 Chromium；AstrBot 只需能访问 Poe2DB。分享内容是公开链接，插件不要求 WeGame 账号或密码。WeGame 分享不包含 poe.ninja 角色账号，所以不能比较这个角色本人的天梯记录；只有 MCP 工具返回了可验证的职业或技能构筑对比数据时才会报告相关比较。
 
 分析会提取 PoB 中当前装备组和已镶嵌珠宝，只对明确标为传奇的物品查找市集链接。poe.ninja 角色使用 Poe2DB `/us/` 物品页；WeGame 构筑使用 Poe2DB `/cn/` 简体物品页的“市集”链接，保留国服页面提供的赛季路径，不回退到国际服市集。物品中文名取自对应中文条目。若分享页、装备数据或市集链接无法生成，会提供手动导入入口或说明缺失部分，不会猜测链接。需要当前会话配置可用聊天模型，且 AstrBot MCP 管理页中的 `poe2-mcp` 已连接并启用工具。
 
@@ -82,7 +82,7 @@ python -m playwright install chromium
 | [Poe2DB 简体](https://poe2db.tw/cn/)／[繁体](https://poe2db.tw/tw/) | 中文词条、游戏数值和说明 | 简体优先；匹配不到或暂时无法读取时尝试繁体。 |
 | [PoE2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki) | 英文词条 | 通过公开 MediaWiki 搜索接口找词条，再读取词条正文；站点要求浏览器验证时跳过。 |
 | [poe.ninja PoE2 Builds](https://poe.ninja/poe2/builds) | 当前赛季公开角色详情链接和 PoB 导入码 | 从公开筛选页及角色详情页渲染内容读取；不读取角色私有数据。 |
-| [PoBR](https://github.com/ackness/pobr) | WeGame 分享导入与 PoB2 码导出 | 插件在独立 Chromium 页面中使用公开导入页面转换；上游服务不需要账号登录，并会在返回构筑数据前清理账号标识。 |
+| [Poe2DB 简体中文账号页](https://poe2db.tw/cn/account) | WeGame 分享解析与 PoB2 导入码 | 插件调用 Poe2DB 的分享解析接口，并读取其返回的简体中文构筑页；只处理公开分享链接。 |
 | [Poe2DB 中文 PoB](https://poe2db.tw/cn/pob) | 角色专属简体中文 Build 分享页 | 将生成的 PoB2 码提交到 Poe2DB 分享接口；分享失败时提供此页供手动导入。 |
 | AstrBot 已连接的 `poe2-mcp` | 公开角色或 PoB2 构筑分析和天梯比较 | `/poe2分析` 只把该 MCP 服务器的工具提供给分析流程；具体结果取决于 MCP 工具实际返回的数据。 |
 
@@ -112,6 +112,6 @@ python -m playwright install chromium
 
 - [AstrBot 插件开发文档](https://github.com/AstrBotDevs/AstrBot/blob/master/docs/zh/dev/star/plugin.md)：插件入口、命令和配置。
 - [Poe2DB](https://poe2db.tw/cn/) 和 [PoE2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki)：运行时资料来源。各站点内容的权利归各自权利人所有。
-- [PoBR](https://github.com/ackness/pobr)：WeGame 分享导入和 PoB2 码转换参考实现。
+- [Poe2DB 简体中文账号页](https://poe2db.tw/cn/account)：WeGame 分享解析入口；插件读取 Poe2DB 返回的简体中文构筑页和 PoB2 导入码。
 - [poe.ninja API 文档](https://poe.ninja/docs/api)：当前赛季与 PoE2 通货价格的数据接口。
 - [poecurrency.top API 文档](https://poecurrency.top/api.html)：国服当前赛季及通货均价接口。
