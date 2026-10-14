@@ -1,6 +1,6 @@
 # 流放之路2资料问答（AstrBot 插件）
 
-在 AstrBot 中用 `/poe2 问题` 查询《流放之路2》资料；匹配到带有 Poe2DB 图片的词条时，答案后会附上图片，没有可用图片则照常回复文字。用 `/poe2search 词条名` 直接搜索技能、装备、怪物等词条并返回摘要和链接，有 Poe2DB 图片时也会附图；用 `/poe2bd 游戏角色名` 查询当前赛季公开 Builds、分析角色构筑并附上详情页链接。物价命令 `/poe2 国际服物价`、`/poe2 国服物价` 返回对应服务器的通货价格图片，插件详情页的“物价采集”页面提供手动采集按钮。资料搜索优先读取 [Poe2DB 简体中文站](https://poe2db.tw/cn/)，需要时回退到[繁体中文站](https://poe2db.tw/tw/)；同时检索 [PoE2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki)。聊天模型根据实际取得的资料生成简体中文回答，并附上来源链接。
+在 AstrBot 中用 `/poe2 问题` 查询《流放之路2》资料；匹配到带有 Poe2DB 图片的词条时，答案后会附上图片，没有可用图片则照常回复文字。用 `/poe2search 词条名` 直接搜索技能、装备、怪物等词条并返回摘要和链接，有 Poe2DB 图片时也会附图；用 `/poe2bd 游戏角色名` 查询当前赛季公开 Builds 并直接返回角色详情链接。物价命令 `/poe2 国际服物价`、`/poe2 国服物价` 返回对应服务器的通货价格图片，插件详情页的“物价采集”页面提供手动采集按钮。资料搜索优先读取 [Poe2DB 简体中文站](https://poe2db.tw/cn/)，需要时回退到[繁体中文站](https://poe2db.tw/tw/)；同时检索 [PoE2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki)。聊天模型根据实际取得的资料生成简体中文回答，并附上来源链接。
 
 ## 安装
 
@@ -11,15 +11,15 @@ cd AstrBot/data/plugins
 git clone https://github.com/xiaoliz1/astrbot_plugin_poe2db.git
 ```
 
-插件代码需要 Python 3.10 或更新版本以及 AstrBot 4.24.2 或更新版本。AstrBot 会按 `requirements.txt` 安装所需 Python 包。为了让 `/poe2bd` 读取公开 Builds 页面中的角色链接和构筑数据，还需在运行 AstrBot 的同一 Python 环境安装 Chromium：
+插件代码需要 Python 3.10 或更新版本以及 AstrBot 4.24.2 或更新版本。AstrBot 会按 `requirements.txt` 安装所需 Python 包。为了让 `/poe2bd` 读取公开 Builds 页面中的角色详情链接，还需在运行 AstrBot 的同一 Python 环境安装 Chromium：
 
 ```bash
 python -m playwright install chromium
 ```
 
-若未安装 Chromium、页面加载失败或角色名无法唯一匹配，命令会回退到角色筛选页链接；当前会话还需要配置可用的聊天模型。
+若未安装 Chromium、页面加载失败或角色名无法唯一匹配，命令会回退到角色筛选页链接。
 
-已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.14.0`。
+已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.15.0`。
 
 ## 使用
 
@@ -62,17 +62,17 @@ python -m playwright install chromium
 /poe2bd 角色名
 ```
 
-命令从 poe.ninja 当前赛季公开 Builds 页查找唯一精确匹配的角色，再读取详情页可见的职业、等级、主技能、辅助宝石、防御统计、天赋信息和装备悬停词条，并交给当前会话配置的聊天模型用简体中文分析。回复会附角色详情页链接。若模型未配置、角色未能唯一匹配或页面暂时无法读取，仍会返回可打开的详情页或筛选页链接。
+命令从 poe.ninja 当前赛季公开 Builds 页查找唯一精确匹配的角色并直接返回详情页链接；无唯一匹配或页面暂时无法读取时，返回带角色名筛选条件的搜索页链接。
 
 `/poe2search 词条名` 不调用聊天模型，直接搜索 Poe2DB 和 PoE2Wiki，按词条标题与搜索词的相似度排列结果，并显示简短摘要和原始页面链接；中文搜索命中 Poe2DB 后，会尝试用页面中的英文名称补查 Wiki。有 Poe2DB 图片时会额外发送图片；没有图片时仍以文字和链接回复。图片只接受 Poe2DB 图片 CDN 的 HTTPS 图片地址。没有直接命中时会返回两站的搜索页链接。技能、辅助宝石、装备、词缀、职业、怪物和地图等类别取决于资料站实际收录内容。
 
-`/poe2bd 游戏角色名` 使用 Playwright 打开 poe.ninja 当前赛季的公开 Builds 筛选页；唯一精确匹配时再读取详情页实际显示的角色信息和装备悬停词条，并交给当前会话模型分析。页面信息不足时，模型需要明确指出未能确认的部分。回复附角色详情链接；无唯一匹配时返回筛选页链接。赛季名称从 poe.ninja 公开的赛季列表读取。插件只读取公开页面渲染的内容，不调用 Builds/Profile 内部接口，也不登录或读取隐藏角色；页面结构变化可能导致数据读取失败或缺少部分装备信息。
+`/poe2bd 游戏角色名` 使用 Playwright 打开 poe.ninja 当前赛季的公开 Builds 筛选页；唯一精确匹配时直接返回角色详情链接，无唯一匹配时返回筛选页链接。赛季名称从 poe.ninja 公开的赛季列表读取。插件只读取公开页面渲染的内容，不调用 Builds/Profile 内部接口，也不登录或读取隐藏角色；页面结构变化可能导致搜索页回退。
 
 | 来源 | 可用内容 | 说明 |
 | --- | --- | --- |
 | [Poe2DB 简体](https://poe2db.tw/cn/)／[繁体](https://poe2db.tw/tw/) | 中文词条、游戏数值和说明 | 简体优先；匹配不到或暂时无法读取时尝试繁体。 |
 | [PoE2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki) | 英文词条 | 通过公开 MediaWiki 搜索接口找词条，再读取词条正文；站点要求浏览器验证时跳过。 |
-| [poe.ninja PoE2 Builds](https://poe.ninja/poe2/builds) | 公开角色构筑页面 | 读取详情页公开显示的技能、装备、天赋和统计信息，供当前会话模型分析；不会调用内部角色接口。 |
+| [poe.ninja PoE2 Builds](https://poe.ninja/poe2/builds) | 当前赛季公开角色详情链接 | 从公开筛选页读取唯一精确匹配的角色链接；不读取角色私有数据。 |
 
 普通问答默认最多引用 5 条资料，分别来自 Poe2DB 和 PoE2Wiki 实际命中的页面；`/poe2search` 也最多显示同样数量的词条。可在 AstrBot 插件配置调整资料条数（1–8）、单次站点请求超时（5–30 秒）和内存缓存时间（0–60 分钟）；若设为 1，每次只显示一条来源。某个来源失败时，另一个来源仍可提供答案。回答会说明资料不足或来源冲突；游戏数值可能随版本改变，应以附上的页面为准。
 
