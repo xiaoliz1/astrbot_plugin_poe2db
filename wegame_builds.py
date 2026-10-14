@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import Any
@@ -15,6 +16,20 @@ LOGGER = logging.getLogger(__name__)
 POBR_WEB_URL = "https://pobr-web.pages.dev/"
 _POBR_HOST = "pobr-web.pages.dev"
 _DEFAULT_TIMEOUT_MS = 45_000
+
+
+def _normalize_empty_wegame_jewel_data(payload: Any) -> tuple[Any, bool]:
+    """Represent an empty WeGame jewel collection as the JSON array PoBR expects."""
+    if (
+        isinstance(payload, dict)
+        and payload.get("format") == "wegame"
+        and isinstance(payload.get("jewel_data"), str)
+        and not payload["jewel_data"].strip()
+    ):
+        normalized = dict(payload)
+        normalized["jewel_data"] = "[]"
+        return normalized, True
+    return payload, False
 
 
 class WeGameBuildError(RuntimeError):
@@ -175,5 +190,34 @@ class WeGameBuildCodeResolver:
             await route.abort()
         elif request.resource_type in {"image", "font", "media"}:
             await route.abort()
+        elif parts.path == "/api/import/wegame" and request.method == "POST":
+            try:
+                response = await route.fetch()
+            except Exception:
+                LOGGER.debug("Unable to inspect PoBR WeGame import response", exc_info=True)
+                await route.continue_()
+                return
+
+            try:
+                payload = await response.json()
+            except Exception:
+                await route.fulfill(response=response)
+                return
+
+            normalized, changed = _normalize_empty_wegame_jewel_data(payload)
+            if not changed:
+                await route.fulfill(response=response)
+                return
+
+            headers = await response.all_headers()
+            for name in ("content-length", "content-encoding", "transfer-encoding"):
+                headers.pop(name, None)
+            headers["content-type"] = "application/json; charset=utf-8"
+            await route.fulfill(
+                status=response.status,
+                headers=headers,
+                body=json.dumps(normalized, ensure_ascii=False).encode("utf-8"),
+            )
+            LOGGER.debug("Normalized empty WeGame jewel data for PoBR import")
         else:
             await route.continue_()
