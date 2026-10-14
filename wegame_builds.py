@@ -124,7 +124,7 @@ class WeGameBuildCodeResolver:
             api_url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "AstrBot-PoE2DB/1.22.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)",
+                "User-Agent": "AstrBot-PoE2DB/1.22.1 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)",
             },
         )
         api_body = self._read_response(
@@ -147,7 +147,7 @@ class WeGameBuildCodeResolver:
             detail_url,
             headers={
                 "Accept": "text/html,application/xhtml+xml",
-                "User-Agent": "AstrBot-PoE2DB/1.22.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)",
+                "User-Agent": "AstrBot-PoE2DB/1.22.1 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)",
             },
         )
         page_body = self._read_response(

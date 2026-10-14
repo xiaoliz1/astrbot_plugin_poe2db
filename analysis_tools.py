@@ -19,3 +19,15 @@ def filter_mcp_tool_set(tool_manager, server_name: str = "poe2-mcp"):
         filtered.add_tool(tool)
 
     return filtered
+
+
+def exclude_tool_set_suffixes(tool_set, suffixes: tuple[str, ...]):
+    """Copy a tool set without tools whose names end in any given suffix."""
+    excluded = tuple(suffix.casefold() for suffix in suffixes)
+    filtered = type(tool_set)()
+    for tool in getattr(tool_set, "tools", []):
+        name = getattr(tool, "name", "")
+        if isinstance(name, str) and any(name.casefold().endswith(suffix) for suffix in excluded):
+            continue
+        filtered.add_tool(tool)
+    return filtered

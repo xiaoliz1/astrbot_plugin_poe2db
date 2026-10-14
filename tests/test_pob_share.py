@@ -19,8 +19,10 @@ from astrbot_plugin_poe2db.pob_share import (
     format_character_build_links,
     _share_id_from_response,
     character_identity_from_profile_url,
+    compact_import_pob_result,
     extract_pob_code,
     fetch_pob_code_from_tool,
+    import_pob_from_tool,
 )
 
 
@@ -117,6 +119,64 @@ class Poe2DBPobShareTests(unittest.TestCase):
         self.assertEqual(
             tool.kwargs, {"account": "account-1234", "character": "Character"}
         )
+
+    def test_imports_valid_code_directly_without_a_model_round_trip(self):
+        code = sample_pob_code()
+        event = object()
+
+        class FakeTool:
+            async def call(self, runtime_context, **kwargs):
+                self.runtime_context = runtime_context
+                self.kwargs = kwargs
+                return SimpleNamespace(
+                    isError=False,
+                    content=[SimpleNamespace(type="text", text="Imported parsed build data")],
+                )
+
+        tool = FakeTool()
+        result = asyncio.run(import_pob_from_tool(tool, event, f"\n{code}\n", 45))
+
+        self.assertEqual(result, "Imported parsed build data")
+        self.assertIs(tool.runtime_context.context.event, event)
+        self.assertEqual(tool.runtime_context.tool_call_timeout, 45)
+        self.assertEqual(tool.kwargs, {"pob_code": code})
+
+    def test_reports_direct_mcp_import_errors(self):
+        code = sample_pob_code()
+
+        class FakeTool:
+            async def call(self, _runtime_context, **_kwargs):
+                return SimpleNamespace(
+                    isError=True,
+                    content=[SimpleNamespace(type="text", text="Base64 decode failed")],
+                )
+
+        with self.assertRaisesRegex(PobShareError, "Base64 decode failed"):
+            asyncio.run(import_pob_from_tool(FakeTool(), object(), code))
+
+    def test_compacts_duplicate_item_text_and_keeps_parsed_build_sections(self):
+        source = (
+            'Successfully imported build:\n'
+            '{"items":[{"name":"Example","mods":["+10 Life"],'
+            '"raw_text":"duplicate","full_text":"duplicate"}],'
+            '"skills":[{"name":"Fireball"}],"tree":{"nodes":[1,2]}}'
+        )
+
+        compacted = compact_import_pob_result(source)
+
+        self.assertNotIn("raw_text", compacted)
+        self.assertNotIn("full_text", compacted)
+        self.assertIn('"mods":["+10 Life"]', compacted)
+        self.assertIn('"skills":[{"name":"Fireball"}]', compacted)
+        self.assertIn('"tree":{"nodes":[1,2]}', compacted)
+
+    def test_rejects_invalid_code_before_calling_mcp(self):
+        class FakeTool:
+            async def call(self, *_args, **_kwargs):
+                raise AssertionError("invalid PoB code should not be sent to MCP")
+
+        with self.assertRaisesRegex(PobShareError, "导入码格式无效"):
+            asyncio.run(import_pob_from_tool(FakeTool(), object(), "not-base64"))
 
     def test_accepts_documented_raw_id_json_and_share_url_responses(self):
         self.assertEqual(_share_id_from_response("WbdBLfSqPxVN\n"), "WbdBLfSqPxVN")

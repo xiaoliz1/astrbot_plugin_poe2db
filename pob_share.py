@@ -81,6 +81,29 @@ def _result_text(result: object) -> str:
     return "\n".join(parts)
 
 
+def compact_import_pob_result(text: str) -> str:
+    """Drop duplicated item text fields while keeping all parsed build sections."""
+    json_start = text.find("{")
+    if json_start < 0:
+        return text
+    try:
+        payload = json.loads(text[json_start:])
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(payload, dict):
+        return text
+
+    items = payload.get("items")
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict):
+                item.pop("raw_text", None)
+                item.pop("full_text", None)
+    return text[:json_start].rstrip() + "\n" + json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":")
+    )
+
+
 def _valid_pob_code(value: str) -> bool:
     compact = "".join(value.split()).strip("`")
     if not _POB_CODE_RE.fullmatch(compact):
@@ -131,6 +154,50 @@ async def fetch_pob_code_from_tool(
         raise PobShareError("AstrBot 的 get_pob_code 工具不可调用。")
     result = await call(runtime_context, account=account, character=character)
     return extract_pob_code(result)
+
+
+async def import_pob_from_tool(
+    tool: object,
+    event: object,
+    pob_code: str,
+    timeout_seconds: int = 120,
+) -> str:
+    """Import a PoB code directly through AstrBot's permission-guarded MCP tool."""
+    from types import SimpleNamespace
+
+    compact_code = "".join(pob_code.split()).strip("`")
+    if not _valid_pob_code(compact_code):
+        raise PobShareError("Path of Building 导入码格式无效。")
+
+    call = getattr(tool, "call", None)
+    if call is None:
+        raise PobShareError("AstrBot 的 import_pob 工具不可调用。")
+
+    runtime_context = SimpleNamespace(
+        context=SimpleNamespace(event=event),
+        tool_call_timeout=timeout_seconds,
+    )
+    try:
+        result = await call(runtime_context, pob_code=compact_code)
+    except Exception as exc:
+        raise PobShareError(f"poe2-mcp 导入 PoB2 失败：{exc}") from exc
+
+    is_error = getattr(result, "isError", getattr(result, "is_error", None))
+    if is_error is None and isinstance(result, dict):
+        is_error = result.get("isError", result.get("is_error", False))
+    text = _result_text(result).strip()
+    if is_error:
+        raise PobShareError(text or "poe2-mcp 返回导入错误。")
+
+    if not text:
+        structured = getattr(result, "structuredContent", None)
+        if structured is None and isinstance(result, dict):
+            structured = result.get("structuredContent", result.get("structured_content"))
+        if structured is not None:
+            text = json.dumps(structured, ensure_ascii=False, default=str)
+    if not text:
+        raise PobShareError("poe2-mcp 没有返回导入后的构筑数据。")
+    return compact_import_pob_result(text)
 
 
 def _share_id_from_response(response_text: str) -> str:
@@ -214,7 +281,7 @@ class Poe2DBPobClient:
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
                 "User-Agent": (
-                    "astrbot_plugin_poe2db/1.22.0 "
+                    "astrbot_plugin_poe2db/1.22.1 "
                     "(https://github.com/xiaoliz1/astrbot_plugin_poe2db; "
                     "contact: https://github.com/xiaoliz1/astrbot_plugin_poe2db/issues)"
                 ),

@@ -19,7 +19,7 @@ python -m playwright install chromium
 
 Chromium 仅用于按角色名搜索 poe.ninja 当前赛季公开 Builds 页面。poe.ninja PoB 分享从公开导出接口读取 PoB2 码，WeGame 分享通过 Poe2DB 接口解析，两者都不需要 Chromium。若未安装 Chromium、角色名无法唯一匹配或 Builds 页面加载失败，角色名查询会回退到筛选页链接。
 
-已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.22.0`。
+已安装旧版时，在 AstrBot 插件管理页更新并重载插件；若按上述命令克隆安装，也可以在插件目录运行 `git pull --ff-only` 后重载。更新后插件信息页应显示 `v1.22.1`。
 
 ## 使用
 
@@ -70,7 +70,7 @@ Chromium 仅用于按角色名搜索 poe.ninja 当前赛季公开 Builds 页面�
 
 `/poe2分析 角色名` 会在 poe.ninja 当前赛季搜索角色；也可以直接发送 poe.ninja 的 Builds 角色详情页链接。两种方式都会把公开构筑交给 `poe2-mcp` 分析，并尝试对比天梯构筑。
 
-`/poe2分析 https://poe.ninja/poe2/pob/分享编号` 会读取该公开 PoB 分享页对应的 PoB2 导入码，再生成 Poe2DB 简体中文 Build 分享页并调用 `poe2-mcp` 的 `import_pob` 工具分析。该分享链接不包含可确认的 poe.ninja 账号，因此不能声称已经读取了特定角色或其角色级天梯数据；若工具提供了可验证的职业或技能构筑对比，才会报告该比较。`/poe2分析 https://www.wegame.com.cn/helper/poe2/#/share/分享码` 会把分享码提交到 Poe2DB 的公开接口，跟随接口返回的简体中文构筑页并读取 `PoB Code`，再生成 Poe2DB 简体中文 Build 分享页并交给 `poe2-mcp` 的 `import_pob` 工具分析。此流程不使用 PoBR，也不需要 Chromium；AstrBot 只需能访问 Poe2DB。分享内容是公开链接，插件不要求 WeGame 账号或密码。WeGame 分享不包含 poe.ninja 角色账号，所以不能比较这个角色本人的天梯记录；只有 MCP 工具返回了可验证的职业或技能构筑对比数据时才会报告相关比较。
+`/poe2分析 https://poe.ninja/poe2/pob/分享编号` 会读取该公开 PoB 分享页对应的 PoB2 导入码，由插件直接调用 `poe2-mcp` 的 `import_pob` 工具导入，再把解析后的构筑数据交给后续分析，并生成 Poe2DB 简体中文 Build 分享页。该分享链接不包含可确认的 poe.ninja 账号，因此不能声称已经读取了特定角色或其角色级天梯数据；若工具提供了可验证的职业或技能构筑对比，才会报告该比较。`/poe2分析 https://www.wegame.com.cn/helper/poe2/#/share/分享码` 会把分享码提交到 Poe2DB 的公开接口，跟随接口返回的简体中文构筑页并读取 `PoB Code`，再生成 Poe2DB 简体中文 Build 分享页，由插件直接调用 `poe2-mcp` 的 `import_pob` 工具导入并分析。此流程不使用 PoBR，也不需要 Chromium；AstrBot 只需能访问 Poe2DB。分享内容是公开链接，插件不要求 WeGame 账号或密码。WeGame 分享不包含 poe.ninja 角色账号，所以不能比较这个角色本人的天梯记录；只有 MCP 工具返回了可验证的职业或技能构筑对比数据时才会报告相关比较。
 
 分析会提取 PoB 中当前装备组和已镶嵌珠宝，只对明确标为传奇的物品查找市集链接。poe.ninja 角色和 poe.ninja PoB 分享构筑使用 Poe2DB `/us/` 国际服物品页；WeGame 构筑使用 Poe2DB `/cn/` 简体物品页的“市集”链接，保留国服页面提供的赛季路径，不回退到国际服市集。物品中文名取自对应中文条目。若分享页、装备数据或市集链接无法生成，会提供手动导入入口或说明缺失部分，不会猜测链接。需要当前会话配置可用聊天模型，且 AstrBot MCP 管理页中的 `poe2-mcp` 已连接并启用工具。
 

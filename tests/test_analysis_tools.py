@@ -4,10 +4,14 @@ import sys
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from astrbot_plugin_poe2db.analysis_tools import filter_mcp_tool_set
+from astrbot_plugin_poe2db.analysis_tools import (
+    exclude_tool_set_suffixes,
+    filter_mcp_tool_set,
+)
 
 
 @dataclass
@@ -68,6 +72,16 @@ class MCPAnalysisToolSelectionTests(unittest.TestCase):
         )
 
         self.assertTrue(result.empty())
+
+    def test_excludes_import_tool_and_preserves_other_wrapped_tools(self):
+        importer = SimpleNamespace(name="poe2-mcp:import_pob")
+        comparer = SimpleNamespace(name="poe2-mcp:compare_to_top_players")
+        tools = FakeToolSet([importer, comparer])
+
+        filtered = exclude_tool_set_suffixes(tools, ("import_pob",))
+
+        self.assertEqual(filtered.tools, [comparer])
+        self.assertIsNot(filtered, tools)
 
 
 if __name__ == "__main__":

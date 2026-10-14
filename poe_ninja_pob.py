@@ -78,7 +78,7 @@ class PoeNinjaPobResolver:
             POE_NINJA_POB_RAW_URL.format(pob_id),
             headers={
                 "Accept": "text/plain,*/*",
-                "User-Agent": "AstrBot-PoE2DB/1.22.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)",
+                "User-Agent": "AstrBot-PoE2DB/1.22.1 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)",
             },
         )
         opener = build_opener(_PoeNinjaRedirectHandler())
