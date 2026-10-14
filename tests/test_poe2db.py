@@ -12,6 +12,7 @@ from astrbot_plugin_poe2db.poe2db import (
     BASE_URLS,
     Poe2DBClient,
     Poe2DBError,
+    parse_multilingual_names,
     parse_query_terms,
     search_url,
 )
@@ -240,6 +241,28 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(Poe2DBClient._allowed("https://example.com/tw/Boneshatter"))
         with self.assertRaises(ValueError):
             search_url("碎骨", "en")
+
+    def test_multilingual_names_are_bounded_and_ignore_invalid_entries(self):
+        parsed = parse_multilingual_names(
+            '{"zh":["碎骨", "魔血", "超出上限"],'
+            '"tw":["碎骨"],"en":["Boneshatter", "Mageblood", "third"]}',
+            max_names=2,
+        )
+
+        self.assertEqual(parsed["zh"], ["碎骨", "魔血"])
+        self.assertEqual(parsed["tw"], ["碎骨"])
+        self.assertEqual(parsed["en"], ["Boneshatter", "Mageblood"])
+        self.assertEqual(
+            parse_multilingual_names('{"en":["https://example.com", "Fireball"]}')[
+                "en"
+            ],
+            ["Fireball"],
+        )
+        self.assertEqual(parse_multilingual_names("invalid"), {"zh": [], "tw": [], "en": []})
+        self.assertEqual(
+            parse_multilingual_names('{"en":["Fireball"]}', max_names=0),
+            {"zh": [], "tw": [], "en": []},
+        )
 
 if __name__ == "__main__":
     unittest.main()

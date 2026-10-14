@@ -19,7 +19,7 @@ BASE_URLS = {
 }
 PREFERRED_LOCALES = ("cn", "tw")
 MAX_RESPONSE_BYTES = 3_000_000
-USER_AGENT = "AstrBot-PoE2DB/1.13.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
+USER_AGENT = "AstrBot-PoE2DB/1.18.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 
 
 class Poe2DBError(RuntimeError):
@@ -73,19 +73,24 @@ def parse_query_terms(model_text: str, question: str) -> list[str]:
     return [fallback.strip()[:40] or question.strip()[:40]]
 
 
-def parse_multilingual_terms(model_text: str, question: str) -> tuple[list[str], list[str]]:
-    """Return up to two main names and their Traditional/English equivalents."""
+def parse_multilingual_names(
+    model_text: str, max_names: int = 2
+) -> dict[str, list[str]]:
+    """Parse bounded Chinese, Traditional Chinese, and English names from JSON."""
     match = re.search(r"\{[\s\S]*\}", model_text or "")
     try:
         parsed = json.loads(match.group(0)) if match else None
     except (ValueError, TypeError):
         parsed = None
     if not isinstance(parsed, dict):
-        fallback = parse_query_terms(model_text, question)
-        return fallback, fallback
+        return {locale: [] for locale in ("zh", "tw", "en")}
 
     by_locale: dict[str, list[str]] = {}
+    limit = max(0, max_names)
     for locale in ("zh", "tw", "en"):
+        if limit == 0:
+            by_locale[locale] = []
+            continue
         values = parsed.get(locale, [])
         if isinstance(values, str):
             values = [values]
@@ -98,13 +103,20 @@ def parse_multilingual_terms(model_text: str, question: str) -> tuple[list[str],
             name = re.sub(r"\s+", " ", value).strip(" \t\r\n,，。？?\"'「」")
             if name and len(name) <= 40 and "://" not in name and name not in cleaned:
                 cleaned.append(name)
-            if len(cleaned) == 2:
+            if len(cleaned) >= limit:
                 break
         by_locale[locale] = cleaned
 
+    return by_locale
+
+
+def parse_multilingual_terms(model_text: str, question: str) -> tuple[list[str], list[str]]:
+    """Return up to two main names and their Traditional/English equivalents."""
+    by_locale = parse_multilingual_names(model_text, max_names=2)
+
     primary = by_locale["zh"] or by_locale["tw"] or by_locale["en"]
     if not primary:
-        primary = parse_query_terms("", question)
+        primary = parse_query_terms(model_text, question)
     names: list[str] = []
     for name in primary + by_locale["tw"] + by_locale["en"]:
         if name not in names:
