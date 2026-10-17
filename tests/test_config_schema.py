@@ -15,6 +15,15 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(mode["labels"], ["白名单", "黑名单"])
         self.assertIn(mode["default"], mode["options"])
 
+    def test_official_update_notifications_are_separately_disabled_by_default(self):
+        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        setting = schema["official_update_notification_enabled"]
+
+        self.assertEqual(setting["type"], "bool")
+        self.assertFalse(setting["default"])
+        self.assertIn("群名单", setting["hint"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,11 @@ from .price_notifications import (
     select_notification_targets,
 )
 from .price_image_store import PriceImageStore
+from .official_updates import (
+    OfficialUpdateStore,
+    fetch_official_updates,
+    format_official_update_notice,
+)
 from .pob_share import (
     POE2DB_POB_IMPORT_URL,
     PobShareError,
@@ -160,7 +165,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.22.8",
+    "1.22.9",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -168,6 +173,7 @@ class Poe2DBPlugin(Star):
         super().__init__(context)
         self.config = config
         timeout = _bounded_int(config.get("timeout_seconds"), 15, 5, 30)
+        self._http_timeout_seconds = timeout
         cache_minutes = _bounded_int(config.get("cache_minutes"), 15, 0, 60)
         self.client = Poe2DBClient(timeout, cache_minutes * 60)
         self.wiki = WikiClient(timeout, cache_minutes * 60)
@@ -179,6 +185,7 @@ class Poe2DBPlugin(Star):
         self.wegame_build_resolver = WeGameBuildCodeResolver(timeout)
         self._price_snapshots: dict[str, CurrencySnapshot] = {}
         data_dir = StarTools.get_data_dir("astrbot_plugin_poe2db")
+        self._official_update_store = OfficialUpdateStore(data_dir)
         self.pob_share_client = Poe2DBPobClient(timeout, data_dir)
         self._price_image_store = PriceImageStore(data_dir)
         self._price_images = dict(self._price_image_store.images)
@@ -205,6 +212,9 @@ class Poe2DBPlugin(Star):
             "手动采集 PoE2 物价",
         )
         self._price_refresh_task = asyncio.create_task(self._price_refresh_loop())
+        self._official_update_task = asyncio.create_task(
+            self._official_update_loop()
+        )
 
     async def terminate(self) -> None:
         """Stop background price tasks when AstrBot unloads the plugin."""
@@ -213,6 +223,7 @@ class Poe2DBPlugin(Star):
             for task in (
                 self._price_refresh_task,
                 self._manual_price_refresh_task,
+                self._official_update_task,
             )
             if task is not None and not task.done()
         ]
@@ -443,6 +454,119 @@ class Poe2DBPlugin(Star):
                 except Exception as exc:
                     self._warn_price_refresh("物价通知", exc)
                 notify_after_success = False
+
+    def _official_update_notification_enabled(self) -> bool:
+        value = self.config.get("official_update_notification_enabled", False)
+        if isinstance(value, str):
+            return value.strip().casefold() in {"1", "true", "yes", "on", "是"}
+        return bool(value)
+
+    def _warn_official_update(self, source: str, error: object) -> None:
+        plugin_logger = getattr(self, "logger", None)
+        if plugin_logger and hasattr(plugin_logger, "warning"):
+            plugin_logger.warning(f"GGG 官方公告{source}失败：{error}")
+
+    async def _official_update_loop(self) -> None:
+        """Scan GGG forums on the configured notice schedule and send new posts."""
+        initial_scan_complete = False
+        retry_at: datetime | None = None
+
+        while True:
+            if not self._official_update_notification_enabled():
+                await asyncio.sleep(60)
+                continue
+
+            offset_hours = normalize_utc_offset_hours(
+                self.config.get("price_timezone_offset"), 8.0
+            )
+            schedule_timezone = timezone_for_utc_offset(offset_hours)
+
+            if not initial_scan_complete:
+                try:
+                    updates = await asyncio.to_thread(
+                        fetch_official_updates, self._http_timeout_seconds
+                    )
+                    self._official_update_store.observe(updates)
+                    initial_scan_complete = True
+                    retry_at = None
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._warn_official_update("首次检查", exc)
+                    await asyncio.sleep(15 * 60)
+                    continue
+
+            now = datetime.now(schedule_timezone)
+            if retry_at is None:
+                run_at = next_price_refresh_at(
+                    now,
+                    self.config.get("price_refresh_times"),
+                    offset_hours,
+                )
+            else:
+                run_at = retry_at.astimezone(schedule_timezone)
+            delay_seconds = max(
+                1.0, (run_at - datetime.now(schedule_timezone)).total_seconds()
+            )
+            await asyncio.sleep(delay_seconds)
+
+            if not self._official_update_notification_enabled():
+                continue
+
+            try:
+                updates = await asyncio.to_thread(
+                    fetch_official_updates, self._http_timeout_seconds
+                )
+                self._official_update_store.observe(updates)
+                sent = await self._send_scheduled_official_updates()
+                retry_at = (
+                    None
+                    if sent
+                    else datetime.now(schedule_timezone) + timedelta(minutes=15)
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._warn_official_update("定时检查", exc)
+                retry_at = datetime.now(schedule_timezone) + timedelta(minutes=15)
+
+    async def _send_scheduled_official_updates(self) -> bool:
+        pending = self._official_update_store.pending_updates()
+        if not pending:
+            return True
+
+        destinations = self._price_notification_destinations()
+        if not destinations:
+            self._warn_official_update(
+                "通知", "没有可发送的群会话，请检查群通知名单和平台配置"
+            )
+            return True
+
+        complete = True
+        for destination in destinations:
+            updates = self._official_update_store.pending_for(destination)
+            if not updates:
+                continue
+            message = MessageChain().message(format_official_update_notice(updates))
+            try:
+                sent = await self.context.send_message(destination, message)
+                if sent:
+                    self._official_update_store.mark_delivered(
+                        destination, [update.id for update in updates]
+                    )
+                else:
+                    complete = False
+                    self._warn_official_update(
+                        "通知", f"未找到可发送到会话的平台：{destination}"
+                    )
+            except Exception as exc:
+                complete = False
+                self._warn_official_update(
+                    "通知", f"发送到 {destination} 失败：{exc}"
+                )
+
+        self._official_update_store.prune_delivered(destinations)
+        return complete
 
     def _remember_group_session(self, event: AstrMessageEvent) -> None:
         umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
