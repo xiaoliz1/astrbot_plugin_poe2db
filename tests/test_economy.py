@@ -12,6 +12,8 @@ from astrbot_plugin_poe2db.economy import (
     EconomyError,
     LEAGUES_URL,
     SCOUT_API_BASE,
+    SCOUT_ITEM_NAME_EN_TO_ZH,
+    SCOUT_ITEM_NAME_ZH_TO_EN,
     CurrencyRow,
     CurrencySnapshot,
     Poe2ScoutEconomyClient,
@@ -19,6 +21,7 @@ from astrbot_plugin_poe2db.economy import (
     parse_scout_currency_page,
     render_currency_html,
     safe_currency_icon_url,
+    scout_item_english_names,
 )
 
 
@@ -340,6 +343,47 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
             "禁断仪式",
         )
         self.assertEqual(localized.rows[0].name, "卡兰德的魔镜")
+        self.assertEqual(localized.rows[0].category, "通货")
+
+    def test_builtin_name_fallback_works_in_both_directions(self):
+        self.assertEqual(SCOUT_ITEM_NAME_EN_TO_ZH["mirrorofkalandra"], "卡兰德的魔镜")
+        self.assertIn("Mirror of Kalandra", SCOUT_ITEM_NAME_ZH_TO_EN["卡兰德的魔镜"])
+        self.assertIn("Mirror of Kalandra", scout_item_english_names("卡兰德的魔镜"))
+
+    def test_builtin_name_fallback_localizes_when_national_names_are_missing(self):
+        snapshot = CurrencySnapshot(
+            "Forbidden Rites",
+            "Divine Orb",
+            (
+                CurrencyRow("Divine Orb", 1.0, None, (), sort_key="divine"),
+                CurrencyRow("Mirror of Kalandra", 100.0, None, (), sort_key="mirror"),
+                CurrencyRow("New Poe2Scout Item", 0.5, None, (), sort_key="new-item"),
+            ),
+            3,
+            "2026-10-18 12:00",
+        )
+
+        localized = localize_currency_snapshot(snapshot, {}, None)
+
+        self.assertEqual(localized.reference, "神圣石")
+        self.assertEqual([row.name for row in localized.rows], ["神圣石", "卡兰德的魔镜", "New Poe2Scout Item"])
+
+    def test_live_chinese_names_override_the_builtin_fallback(self):
+        snapshot = CurrencySnapshot(
+            "Forbidden Rites",
+            "Divine Orb",
+            (CurrencyRow("Mirror of Kalandra", 100.0, None, (), sort_key="mirror"),),
+            1,
+            "2026-10-18 12:00",
+        )
+
+        localized = localize_currency_snapshot(
+            snapshot,
+            {"mirror": ("国服当前译名", "通货")},
+            None,
+        )
+
+        self.assertEqual(localized.rows[0].name, "国服当前译名")
         self.assertEqual(localized.rows[0].category, "通货")
 
     def test_market_image_caps_at_50_rows_and_shows_category_column(self):

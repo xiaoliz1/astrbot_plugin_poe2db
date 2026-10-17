@@ -8,8 +8,10 @@ import json
 import math
 import re
 import time
+import unicodedata
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
@@ -97,6 +99,61 @@ def currency_key(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.casefold())
 
 
+def _chinese_name_key(name: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", name).split()).casefold()
+
+
+def _load_builtin_item_name_fallback(
+    path: Path | None = None,
+) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    """Load unambiguous English->CN and CN->English names shipped with the plugin."""
+    source_path = path or Path(__file__).with_name("item_name_fallback.json")
+    try:
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}, {}
+    rows = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return {}, {}
+
+    english_candidates: dict[str, set[str]] = {}
+    chinese_candidates: dict[str, set[str]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        english = row.get("english")
+        chinese = row.get("chinese")
+        if not isinstance(english, str) or not isinstance(chinese, str):
+            continue
+        if not english.strip() or not chinese.strip() or not any("\u3400" <= char <= "\u9fff" for char in chinese):
+            continue
+        english_key = currency_key(english)
+        chinese_key = _chinese_name_key(chinese)
+        if not english_key or not chinese_key:
+            continue
+        english_candidates.setdefault(english_key, set()).add(chinese)
+        chinese_candidates.setdefault(chinese_key, set()).add(english)
+
+    english_to_chinese = {
+        key: next(iter(values))
+        for key, values in english_candidates.items()
+        if len(values) == 1
+    }
+    chinese_to_english = {
+        key: tuple(sorted(values, key=str.casefold))
+        for key, values in chinese_candidates.items()
+    }
+    return english_to_chinese, chinese_to_english
+
+
+SCOUT_ITEM_NAME_EN_TO_ZH, SCOUT_ITEM_NAME_ZH_TO_EN = _load_builtin_item_name_fallback()
+
+
+def scout_item_english_names(chinese_name: str) -> tuple[str, ...]:
+    """Return Poe2Scout English labels for an exact bundled Chinese item name."""
+    return SCOUT_ITEM_NAME_ZH_TO_EN.get(_chinese_name_key(chinese_name), ())
+
+
 def safe_currency_icon_url(value: object) -> str | None:
     """Allow only the static item image paths returned by our two price APIs."""
     if not isinstance(value, str) or not value or "\\" in value:
@@ -139,6 +196,8 @@ def localize_currency_snapshot(
     chinese_league: str | None,
 ) -> CurrencySnapshot:
     reference_entry = chinese_names.get(currency_key(snapshot.reference))
+    if reference_entry is None:
+        reference_entry = SCOUT_ITEM_NAME_EN_TO_ZH.get(currency_key(snapshot.reference))
     reference = (
         reference_entry[0]
         if isinstance(reference_entry, tuple) and reference_entry
@@ -149,7 +208,12 @@ def localize_currency_snapshot(
     localized_rows: list[CurrencyRow] = []
     for row in snapshot.rows:
         key = row.sort_key or currency_key(row.name)
-        entry = chinese_names.get(key) or chinese_names.get(currency_key(row.name))
+        name_key = currency_key(row.name)
+        entry = chinese_names.get(key)
+        if entry is None:
+            entry = chinese_names.get(name_key)
+        if entry is None:
+            entry = SCOUT_ITEM_NAME_EN_TO_ZH.get(name_key)
         if isinstance(entry, str):
             name, category = entry, row.category
         elif isinstance(entry, tuple) and entry:

@@ -165,7 +165,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.22.10",
+    "1.22.11",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
