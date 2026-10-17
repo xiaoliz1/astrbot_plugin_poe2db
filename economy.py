@@ -98,6 +98,7 @@ class UniqueItemPrice:
     explicit_mods: tuple[str, ...]
     price_history: tuple[float, ...]
     poe2db_url: str | None
+    traditional_name: str | None = None
 
 
 UNIQUE_ITEM_QUERY_ALIASES = {
@@ -200,17 +201,26 @@ def _load_builtin_item_name_fallback(
         if not isinstance(row, dict):
             continue
         english = row.get("english")
-        chinese = row.get("chinese")
-        if not isinstance(english, str) or not isinstance(chinese, str):
-            continue
-        if not english.strip() or not chinese.strip() or not any("\u3400" <= char <= "\u9fff" for char in chinese):
+        if not isinstance(english, str) or not english.strip():
             continue
         english_key = currency_key(english)
-        chinese_key = _chinese_name_key(chinese)
-        if not english_key or not chinese_key:
+        if not english_key:
             continue
-        english_candidates.setdefault(english_key, set()).add(chinese)
-        chinese_candidates.setdefault(chinese_key, set()).add(english)
+        chinese = row.get("chinese")
+        if (
+            isinstance(chinese, str)
+            and chinese.strip()
+            and any("\u3400" <= char <= "\u9fff" for char in chinese)
+        ):
+            english_candidates.setdefault(english_key, set()).add(chinese)
+            chinese_candidates.setdefault(_chinese_name_key(chinese), set()).add(english)
+        traditional = row.get("traditional")
+        if (
+            isinstance(traditional, str)
+            and traditional.strip()
+            and any("\u3400" <= char <= "\u9fff" for char in traditional)
+        ):
+            chinese_candidates.setdefault(_chinese_name_key(traditional), set()).add(english)
 
     english_to_chinese = {
         key: next(iter(values))
@@ -227,9 +237,53 @@ def _load_builtin_item_name_fallback(
 SCOUT_ITEM_NAME_EN_TO_ZH, SCOUT_ITEM_NAME_ZH_TO_EN = _load_builtin_item_name_fallback()
 
 
+def _load_builtin_item_traditional_names(
+    path: Path | None = None,
+) -> dict[str, str]:
+    """Load unambiguous English-to-Traditional Chinese names from the bundle."""
+    source_path = path or Path(__file__).with_name("item_name_fallback.json")
+    try:
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    rows = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return {}
+
+    candidates: dict[str, set[str]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        traditional = row.get("traditional")
+        if (
+            not isinstance(traditional, str)
+            or not traditional.strip()
+            or not any("\u3400" <= char <= "\u9fff" for char in traditional)
+        ):
+            continue
+        for english in (row.get("english"), row.get("name")):
+            if isinstance(english, str) and english.strip():
+                key = currency_key(english)
+                if key:
+                    candidates.setdefault(key, set()).add(traditional.strip())
+    return {
+        key: next(iter(values))
+        for key, values in candidates.items()
+        if len(values) == 1
+    }
+
+
+SCOUT_ITEM_NAME_EN_TO_TW = _load_builtin_item_traditional_names()
+
+
 def scout_item_english_names(chinese_name: str) -> tuple[str, ...]:
-    """Return Poe2Scout English labels for an exact bundled Chinese item name."""
+    """Return Poe2Scout English labels for an exact bundled CN or TW item name."""
     return SCOUT_ITEM_NAME_ZH_TO_EN.get(_chinese_name_key(chinese_name), ())
+
+
+def scout_item_traditional_name(english_name: str) -> str | None:
+    """Return the bundled Traditional Chinese name for an exact English item name."""
+    return SCOUT_ITEM_NAME_EN_TO_TW.get(currency_key(english_name))
 
 
 def _load_builtin_item_references(
@@ -320,6 +374,7 @@ def _parse_unique_item(item: object) -> UniqueItemPrice | None:
     metadata = metadata if isinstance(metadata, dict) else {}
     reference = scout_item_reference(name) or scout_item_reference(text)
     chinese_name = reference[0] if reference else SCOUT_ITEM_NAME_EN_TO_ZH.get(currency_key(text))
+    traditional_name = scout_item_traditional_name(name) or scout_item_traditional_name(text)
     current_price = _finite_number(item.get("CurrentPrice"))
     if current_price is not None and current_price <= 0:
         current_price = None
@@ -358,6 +413,7 @@ def _parse_unique_item(item: object) -> UniqueItemPrice | None:
         explicit_mods=_safe_item_mods(metadata.get("explicit_mods")),
         price_history=tuple(entry[2] for entry in history),
         poe2db_url=reference[1] if reference else None,
+        traditional_name=traditional_name,
     )
 
 
@@ -394,6 +450,7 @@ def format_unique_item_price_reply(
     market_url: str | None = None,
     article_url: str | None = None,
     localized_mods: tuple[str, ...] = (),
+    traditional_name: str | None = None,
 ) -> str:
     """Format a concise Chinese single-item price reply."""
     title = item.chinese_name or item.name
@@ -406,6 +463,9 @@ def format_unique_item_price_reply(
         f"国际服当前价：{price}｜在售：{quantity}",
         f"7 日走势：{_format_price_history(item.price_history)}",
     ]
+    traditional_name = " ".join((traditional_name or item.traditional_name or "").split())
+    if traditional_name and traditional_name.casefold() != title.casefold():
+        lines.insert(1, f"繁体名称：{traditional_name}")
     mods = _chinese_unique_item_mods(item, localized_mods)
     lines.append("主要词缀：" + ("；".join(mods) if mods else "暂无中文词缀资料"))
     article_url = article_url or item.poe2db_url

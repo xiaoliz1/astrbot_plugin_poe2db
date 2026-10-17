@@ -1,9 +1,10 @@
 """Build the bundled Poe2Scout item name and link table.
 
 The script joins current-season Poe2Scout item labels to the item listings on
-Poe2DB's English and Simplified Chinese pages by their shared article slug.
-Only unambiguous Poe2DB matches are localized; unmatched names remain in the
-output with ``chinese`` set to null so the caller can safely retain English.
+Poe2DB's English, Simplified Chinese, and Traditional Chinese pages by their
+shared article slug. Only unambiguous Poe2DB matches are localized; unmatched
+names remain in the output with localized fields set to null so the caller can
+safely retain English.
 Each row also includes the Poe2Wiki page and a current-league official Trade
 search URL whenever Poe2Scout exposes enough item metadata to build one.
 
@@ -94,28 +95,35 @@ def parse_anchors(page: str) -> list[dict[str, str]]:
     return parser.anchors
 
 
-def category_pages(items_index: str) -> list[str]:
+def category_pages(items_index: str, locale: str = "cn") -> list[str]:
+    if locale not in {"cn", "tw"}:
+        raise ValueError(f"Unsupported Poe2DB locale: {locale}")
+    locale_prefix = f"/{locale}/"
     pages: set[str] = set()
     for anchor in parse_anchors(items_index):
         href = anchor.get("href", "").strip()
+        path = href.split("?", 1)[0].split("#", 1)[0]
         classes = set(anchor.get("class", "").split())
         if "ItemClasses" in classes:
-            if href.startswith("/"):
-                if href.startswith("/cn/"):
-                    pages.add(href)
-            elif href and not href.startswith(("#", "http", "javascript:")):
-                pages.add("/cn/" + href.lstrip("/"))
-        elif href.startswith("/cn/") and href.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] in SPECIAL_INDEX_PAGES:
-            pages.add(href.split("?", 1)[0])
-    pages.update("/cn/" + page for page in SPECIAL_INDEX_PAGES)
+            if path.startswith(locale_prefix):
+                pages.add(path)
+            elif path and not path.startswith(("/", "#", "http", "javascript:")):
+                pages.add(locale_prefix + path.lstrip("/"))
+        elif path.startswith(locale_prefix) and path.rstrip("/").rsplit("/", 1)[-1] in SPECIAL_INDEX_PAGES:
+            pages.add(path)
+    pages.update(locale_prefix + page for page in SPECIAL_INDEX_PAGES)
 
     # The current league's mechanic page can contain currency or rune item
     # cards that are not part of the generic item-class index.
     for anchor in parse_anchors(items_index):
         href = anchor.get("href", "").strip()
+        path = href.split("?", 1)[0].split("#", 1)[0]
         classes = set(anchor.get("class", "").split())
-        if "league_bar_icon" in classes and href and not href.startswith(("#", "http", "javascript:")):
-            pages.add("/cn/" + href.lstrip("/"))
+        if "league_bar_icon" in classes:
+            if path.startswith(locale_prefix):
+                pages.add(path)
+            elif path and not path.startswith(("/", "#", "http", "javascript:")):
+                pages.add(locale_prefix + path.lstrip("/"))
     return sorted(pages)
 
 
@@ -134,7 +142,7 @@ def canonical_slug(href: str, locale: str) -> str | None:
     if not path:
         return None
     pieces = path.split("/")
-    if pieces[0] in {"cn", "us"}:
+    if pieces[0] in {"cn", "us", "tw"}:
         if len(pieces) < 2 or pieces[0] != locale:
             return None
         pieces = pieces[1:]
@@ -204,30 +212,49 @@ def collect_scout_catalog(
     return league, current, realm, items
 
 
-def collect_poe2db_matches(pages: list[str], timeout: int, delay: float) -> dict[str, set[tuple[str, str, str]]]:
-    matches: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+def collect_poe2db_matches(
+    cn_pages: list[str], tw_pages: list[str], timeout: int, delay: float
+) -> dict[str, set[tuple[str, str, str, str]]]:
+    matches: dict[str, set[tuple[str, str, str, str]]] = defaultdict(set)
     failures: list[str] = []
-    for index, cn_path in enumerate(pages, 1):
+    tw_pages_by_slug = {
+        path.removeprefix("/tw/"): path for path in tw_pages if path.startswith("/tw/")
+    }
+    for index, cn_path in enumerate(cn_pages, 1):
         slug = cn_path.removeprefix("/cn/")
         cn_url = POE2DB_BASE + cn_path
+        tw_path = tw_pages_by_slug.get(slug)
+        tw_url = POE2DB_BASE + tw_path if tw_path else None
         us_url = POE2DB_BASE + "/us/" + slug
         try:
             cn_html = fetch_text(cn_url, timeout)
             time.sleep(delay)
             us_html = fetch_text(us_url, timeout)
             time.sleep(delay)
+            tw_html = ""
+            if tw_url:
+                try:
+                    tw_html = fetch_text(tw_url, timeout)
+                except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+                    print(f"[{index}/{len(cn_pages)}] skip {tw_path}: {type(exc).__name__}: {exc}", flush=True)
+                time.sleep(delay)
             cn_labels = item_labels(cn_html, "cn")
             us_labels = item_labels(us_html, "us")
+            tw_labels = item_labels(tw_html, "tw") if tw_html else {}
             for item_slug in cn_labels.keys() & us_labels.keys():
                 english = us_labels[item_slug]
                 chinese = cn_labels[item_slug]
+                traditional = tw_labels.get(item_slug, "")
+                if not has_cjk(traditional):
+                    traditional = ""
                 key = normalized_name(english)
                 if key and chinese and has_cjk(chinese) and chinese != english:
-                    matches[key].add((english, chinese, item_slug))
-            print(f"[{index}/{len(pages)}] {slug}: {len(cn_labels.keys() & us_labels.keys())} paired item links", flush=True)
+                    matches[key].add((english, chinese, traditional, item_slug))
+            paired_count = len(cn_labels.keys() & us_labels.keys())
+            print(f"[{index}/{len(cn_pages)}] {slug}: {paired_count} paired item links, {len(tw_labels)} Traditional labels", flush=True)
         except (HTTPError, URLError, TimeoutError, ValueError) as exc:
             failures.append(f"{cn_path}: {type(exc).__name__}: {exc}")
-            print(f"[{index}/{len(pages)}] skip {cn_path}: {type(exc).__name__}: {exc}", flush=True)
+            print(f"[{index}/{len(cn_pages)}] skip {cn_path}: {type(exc).__name__}: {exc}", flush=True)
             time.sleep(delay)
     if failures:
         print(f"Poe2DB pages unavailable: {len(failures)}", file=sys.stderr)
@@ -284,7 +311,7 @@ def trade_url_for_item(
 
 def build_rows(
     scout_items: list[dict[str, object]],
-    matches: dict[str, set[tuple[str, str, str]]],
+    matches: dict[str, set[tuple[str, str, str, str]]],
     league: str,
     realm: dict[str, object],
     league_metadata: dict[str, object],
@@ -300,6 +327,8 @@ def build_rows(
         chinese_values = {candidate[1] for candidate in candidates}
         matched = len(chinese_values) == 1
         chinese = next(iter(chinese_values)) if matched else None
+        traditional_values = {candidate[2] for candidate in candidates if candidate[2]}
+        traditional = next(iter(traditional_values)) if len(traditional_values) == 1 else None
         if not matched:
             unmatched.append(english)
         candidate = sorted(candidates)[0] if matched else None
@@ -307,12 +336,13 @@ def build_rows(
             {
                 "english": english,
                 "chinese": chinese,
+                "traditional": traditional,
                 "category": item.get("CategoryApiId"),
                 "name": item.get("Name"),
                 "type": item.get("Type"),
                 "api_id": item.get("ApiId"),
                 "base_item_type_id": item.get("BaseItemTypeId"),
-                "poe2db_url": f"{POE2DB_BASE}/cn/{candidate[2]}" if candidate else None,
+                "poe2db_url": f"{POE2DB_BASE}/cn/{candidate[3]}" if candidate else None,
                 "wiki_url": wiki_url_for_item(item),
                 "trade_url": trade_url_for_item(item, league, realm, league_metadata),
             }
@@ -331,26 +361,32 @@ def main() -> int:
         parser.error("--delay must be nonnegative and --timeout must be positive")
 
     league, league_metadata, realm, scout_items = collect_scout_catalog(args.timeout)
-    index_html = fetch_text(POE2DB_BASE + "/cn/Items", args.timeout)
+    cn_index_html = fetch_text(POE2DB_BASE + "/cn/Items", args.timeout)
     time.sleep(args.delay)
-    pages = category_pages(index_html)
+    tw_index_html = fetch_text(POE2DB_BASE + "/tw/Items", args.timeout)
+    time.sleep(args.delay)
+    cn_pages = category_pages(cn_index_html, "cn")
+    tw_pages = category_pages(tw_index_html, "tw")
     print(f"Poe2Scout current league {league}: {len(scout_items)} catalog rows", flush=True)
-    print(f"Poe2DB index pages to compare: {len(pages)}", flush=True)
+    print(f"Poe2DB CN/TW index pages to compare: {len(cn_pages)}/{len(tw_pages)}", flush=True)
 
-    matches = collect_poe2db_matches(pages, args.timeout, args.delay)
+    matches = collect_poe2db_matches(cn_pages, tw_pages, args.timeout, args.delay)
     rows, unmatched = build_rows(scout_items, matches, league, realm, league_metadata)
     mapped_count = sum(row["chinese"] is not None for row in rows)
+    traditional_count = sum(row["traditional"] is not None for row in rows)
     document = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "league": league,
         "trade_league": league,
         "catalog_count": len(rows),
         "matched_count": mapped_count,
         "unmatched_count": len(rows) - mapped_count,
+        "traditional_matched_count": traditional_count,
         "sources": {
             "catalog": f"{POE2SCOUT_API}/poe2/Leagues/{quote(league, safe='')}/Items",
             "chinese_names": "https://poe2db.tw/cn/Items",
+            "traditional_names": "https://poe2db.tw/tw/Items",
             "english_names": "https://poe2db.tw/us/Items",
             "wiki": "https://www.poe2wiki.net/",
             "trade": "https://www.pathofexile.com/trade2/",
@@ -360,9 +396,13 @@ def main() -> int:
         "items": rows,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     print(f"Wrote {args.output}", flush=True)
     print(f"Matched {mapped_count}/{len(rows)} Poe2Scout item names ({100 * mapped_count / max(1, len(rows)):.1f}%)", flush=True)
+    print(f"Matched {traditional_count}/{len(rows)} Traditional Chinese item names", flush=True)
     if unmatched:
         print("Unmatched sample:", "; ".join(unmatched[:30]), flush=True)
     return 0

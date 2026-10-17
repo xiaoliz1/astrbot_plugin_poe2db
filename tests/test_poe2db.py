@@ -213,6 +213,7 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
         query_url = search_url(item_name, "us")
         us_url = "https://poe2db.tw/us/Mageblood"
         cn_url = "https://poe2db.tw/cn/Mageblood"
+        tw_url = "https://poe2db.tw/tw/Mageblood"
         stale_market_url = (
             "https://www.pathofexile.com/trade2/search/poe2/Runes%20of%20Aldur"
             "?q=%7B%22query%22%3A%7B%22name%22%3A%22Mageblood%22%7D%7D"
@@ -228,6 +229,8 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
                 <div class="explicitMod">20% 的药剂回复量立即生效</div>
                 <div class="explicitMod">Mages Legacy 继承</div>
               </div></div></body></html>""",
+            tw_url: """<html><head><title>魔血 實用腰帶 - Poe2DB</title></head>
+              <body><div class="page-content"><h3>魔血</h3></div></body></html>""",
         }
         client = FixtureClient(pages)
         client._resolved_urls[query_url] = us_url
@@ -236,6 +239,7 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result.chinese_name, "魔血")
+        self.assertEqual(result.traditional_name, "魔血 實用腰帶")
         self.assertEqual(
             result.localized_mods,
             ("具有 (1—3) 个咒符位", "20% 的药剂回复量立即生效"),
@@ -245,12 +249,45 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
             "https://www.pathofexile.com/trade2/search/poe2/Forbidden%20Rites"
             "?q=%7B%22query%22%3A%7B%22name%22%3A%22Mageblood%22%7D%7D",
         )
+        self.assertIn(tw_url, client.visited)
+
+    async def test_market_lookup_skips_tw_page_when_builtin_name_is_available(self):
+        item_name = "Mageblood"
+        query_url = search_url(item_name, "us")
+        us_url = "https://poe2db.tw/us/Mageblood"
+        cn_url = "https://poe2db.tw/cn/Mageblood"
+        market_url = (
+            "https://www.pathofexile.com/trade2/search/poe2/Forbidden%20Rites"
+            "?q=%7B%22query%22%3A%7B%22name%22%3A%22Mageblood%22%7D%7D"
+        )
+        client = FixtureClient(
+            {
+                query_url: f"""<html><head><title>Mageblood - Poe2DB</title></head>
+                  <body><div class="page-content"><h3>Mageblood</h3>
+                    <table><tr><td>The Market</td><td><a href="{market_url}">The Market</a></td></tr></table>
+                  </div></body></html>""",
+                cn_url: """<html><head><title>法师之血 - Poe2DB</title></head>
+                  <body><div class="page-content"><h3>法师之血</h3></div></body></html>""",
+            }
+        )
+        client._resolved_urls[query_url] = us_url
+
+        result = await client.find_unique_market_link(
+            item_name,
+            "Forbidden Rites",
+            include_traditional_name=False,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIsNone(result.traditional_name)
+        self.assertNotIn("https://poe2db.tw/tw/Mageblood", client.visited)
 
     async def test_national_market_link_comes_from_the_chinese_article(self):
         item_name = "Mageblood"
         query_url = search_url(item_name, "us")
         us_url = "https://poe2db.tw/us/Mageblood"
         cn_url = "https://poe2db.tw/cn/Mageblood"
+        tw_url = "https://poe2db.tw/tw/Mageblood"
         cn_trade_url = (
             "https://poe.game.qq.com/trade2/search/poe2/%E5%A5%A5%E6%9D%9C%E5%B0%94%E7%A7%98%E7%AC%A6"
             "?q="
@@ -270,6 +307,8 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
               <body><div class="page-content"><h3>法师之血</h3>
                 <table><tr><td>市集</td><td><a href="{cn_trade_url}">市集</a></td></tr></table>
               </div></body></html>""",
+            tw_url: """<html><head><title>魔血 實用腰帶 - Poe2DB</title></head>
+              <body><div class="page-content"><h3>魔血</h3></div></body></html>""",
         }
         client = FixtureClient(pages)
         client._resolved_urls[query_url] = us_url
@@ -280,6 +319,7 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result.chinese_name, "法师之血")
+        self.assertEqual(result.traditional_name, "魔血 實用腰帶")
         self.assertEqual(result.url, cn_trade_url)
         self.assertEqual(result.article_url, cn_url)
 

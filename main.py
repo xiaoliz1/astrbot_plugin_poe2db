@@ -1284,7 +1284,10 @@ class Poe2DBPlugin(Star):
             try:
                 market_link = (
                     await self.client.find_unique_market_link(
-                        item.name, league_name, locale="us"
+                        item.name,
+                        league_name,
+                        locale="us",
+                        include_traditional_name=not bool(item.traditional_name),
                     )
                     if league_name
                     else None
@@ -1301,6 +1304,9 @@ class Poe2DBPlugin(Star):
                         else None
                     ),
                     localized_mods=market_link.localized_mods if market_link else (),
+                    traditional_name=(
+                        market_link.traditional_name if market_link else None
+                    ),
                 )
             )
 

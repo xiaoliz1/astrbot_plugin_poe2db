@@ -26,6 +26,7 @@ from astrbot_plugin_poe2db.economy import (
     safe_currency_icon_url,
     scout_item_english_names,
     scout_item_reference,
+    scout_item_traditional_name,
 )
 
 
@@ -247,6 +248,7 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].name, "Mageblood")
         self.assertEqual(items[0].chinese_name, "法师之血 万用腰带")
+        self.assertEqual(items[0].traditional_name, "魔血 實用腰帶")
         self.assertEqual(items[0].current_price, 179.5)
         self.assertEqual(items[0].current_quantity, 42)
         self.assertEqual(items[0].price_history, (160.0, 179.5))
@@ -266,6 +268,7 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
             explicit_mods=("Legacy of Topaz",),
             price_history=(160.0, 179.5),
             poe2db_url="https://poe2db.tw/cn/Mageblood",
+            traditional_name="魔血 實用腰帶",
         )
 
         reply = format_unique_item_price_reply(
@@ -275,6 +278,7 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
             localized_mods=("具有 (1—3) 个咒符位", "20% 的药剂回复量立即生效"),
         )
 
+        self.assertIn("繁体名称：魔血 實用腰帶", reply)
         self.assertIn("国际服当前价：179.5 神圣石", reply)
         self.assertIn("在售：42 件", reply)
         self.assertIn("7 日走势：", reply)
@@ -490,6 +494,8 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(SCOUT_ITEM_NAME_EN_TO_ZH["mirrorofkalandra"], "卡兰德的魔镜")
         self.assertIn("Mirror of Kalandra", SCOUT_ITEM_NAME_ZH_TO_EN["卡兰德的魔镜"])
         self.assertIn("Mirror of Kalandra", scout_item_english_names("卡兰德的魔镜"))
+        self.assertEqual(scout_item_traditional_name("Mageblood"), "魔血 實用腰帶")
+        self.assertIn("Mageblood Utility Belt", scout_item_english_names("魔血 實用腰帶"))
 
     def test_builtin_name_fallback_localizes_when_national_names_are_missing(self):
         snapshot = CurrencySnapshot(

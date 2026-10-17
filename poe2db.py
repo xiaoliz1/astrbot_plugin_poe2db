@@ -44,6 +44,7 @@ class MarketLink:
     url: str
     article_url: str | None = None
     localized_mods: tuple[str, ...] = ()
+    traditional_name: str | None = None
 
 
 def search_url(term: str, locale: str = "cn") -> str:
@@ -333,7 +334,11 @@ class Poe2DBClient:
         return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
 
     async def find_unique_market_link(
-        self, item_name: str, league_name: str, locale: str = "us"
+        self,
+        item_name: str,
+        league_name: str,
+        locale: str = "us",
+        include_traditional_name: bool = True,
     ) -> MarketLink | None:
         """Find an exact unique item's market link from its requested Poe2DB locale.
 
@@ -386,12 +391,18 @@ class Poe2DBClient:
                         urljoin(chinese_url, market_href), chinese_name
                     )
                     if market_url:
+                        traditional_name = (
+                            await self._traditional_name_for_us_article(article_url)
+                            if include_traditional_name
+                            else None
+                        )
                         return MarketLink(
                             name,
                             chinese_name,
                             market_url,
                             article_url=chinese_url,
                             localized_mods=self._localized_item_mods(chinese_soup),
+                            traditional_name=traditional_name,
                         )
                     continue
 
@@ -403,7 +414,16 @@ class Poe2DBClient:
                 )
                 if not market_url:
                     continue
-                chinese_article = await self._chinese_article_for_us_article(article_url)
+                if include_traditional_name:
+                    chinese_article, traditional_name = await asyncio.gather(
+                        self._chinese_article_for_us_article(article_url),
+                        self._traditional_name_for_us_article(article_url),
+                    )
+                else:
+                    chinese_article = await self._chinese_article_for_us_article(
+                        article_url
+                    )
+                    traditional_name = None
                 chinese_name = chinese_article[2] if chinese_article else None
                 localized_mods = (
                     self._localized_item_mods(chinese_article[1])
@@ -415,6 +435,7 @@ class Poe2DBClient:
                     chinese_name,
                     market_url,
                     localized_mods=localized_mods,
+                    traditional_name=traditional_name,
                 )
         except Poe2DBError:
             return None
@@ -423,6 +444,48 @@ class Poe2DBClient:
     async def _chinese_title_for_us_article(self, article_url: str) -> str | None:
         article = await self._chinese_article_for_us_article(article_url)
         return article[2] if article else None
+
+    async def _traditional_name_for_us_article(self, article_url: str) -> str | None:
+        """Read the full Traditional Chinese item name from the matching /tw/ page."""
+        parts = urlsplit(article_url)
+        if (
+            parts.scheme != "https"
+            or parts.hostname != "poe2db.tw"
+            or parts.port is not None
+            or parts.username is not None
+            or parts.password is not None
+            or not parts.path.startswith("/us/")
+            or parts.path.count("/") != 2
+            or not parts.path[len("/us/") :]
+        ):
+            return None
+        traditional_url = urlunsplit(
+            (parts.scheme, parts.netloc, "/tw/" + parts.path[len("/us/") :], "", "")
+        )
+        try:
+            soup = BeautifulSoup(await self._fetch(traditional_url), "html.parser")
+            self._check_challenge(self._title(soup))
+        except Poe2DBError:
+            return None
+
+        resolved_url = self._resolved_urls.get(traditional_url, traditional_url)
+        resolved = urlsplit(resolved_url)
+        if (
+            resolved.scheme != "https"
+            or resolved.hostname != "poe2db.tw"
+            or resolved.path.casefold() != urlsplit(traditional_url).path.casefold()
+        ):
+            return None
+
+        # The page title includes the translated item name and base type, while
+        # the heading usually contains only the short unique-item name.
+        full_name = self._title(soup)
+        name = (
+            full_name
+            if any("\u3400" <= char <= "\u9fff" for char in full_name)
+            else self._article_heading(soup)
+        )
+        return name or None
 
     @staticmethod
     def _localized_item_mods(soup: BeautifulSoup) -> tuple[str, ...]:
