@@ -29,6 +29,7 @@ from .economy import (
     CurrencySnapshot,
     EconomyError,
     Poe2ScoutEconomyClient,
+    format_unique_item_price_reply,
     localize_currency_snapshot,
     render_currency_html,
 )
@@ -111,6 +112,12 @@ def _search_query_from_message(message: str) -> str:
     return text[match.end() :].strip() if match else text
 
 
+def _unique_price_query_from_message(message: str) -> str:
+    text = message.strip()
+    match = re.match(r"(?i)^\s*\S*?poe2价(?:\s+|$)", text)
+    return text[match.end() :].strip() if match else text
+
+
 def _first_source_image(sources: list[Source]) -> str | None:
     return next(
         (
@@ -165,7 +172,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.22.11",
+    "1.22.12",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -1242,6 +1249,70 @@ class Poe2DBPlugin(Star):
         if image_url:
             yield event.image_result(image_url)
 
+    @filter.command("poe2价")
+    async def poe2_unique_price(self, event: AstrMessageEvent):
+        """查询传奇物品实时价格、数量、词缀和 Poe2DB 链接。"""
+        self._remember_group_session(event)
+        query = _unique_price_query_from_message(event.message_str)
+        if not query:
+            yield event.plain_result(
+                "用法：/poe2价 传奇名称，例如 /poe2价 魔血 或 /poe2价 Mageblood"
+            )
+            return
+        if len(query) > 80:
+            yield event.plain_result("物品名称请控制在 80 字以内。")
+            return
+
+        try:
+            items = await self.economy.unique_item_prices(query)
+        except EconomyError as exc:
+            yield event.plain_result(str(exc))
+            return
+        except Exception as exc:
+            plugin_logger = getattr(self, "logger", None)
+            if plugin_logger and hasattr(plugin_logger, "warning"):
+                plugin_logger.warning(f"传奇物价查询失败：{exc}")
+            yield event.plain_result("传奇物价暂时无法读取，请稍后重试。")
+            return
+
+        try:
+            league_name = await self.economy.current_league_name()
+        except Exception:
+            league_name = ""
+        replies: list[str] = []
+        for item in items[:5]:
+            try:
+                market_link = (
+                    await self.client.find_unique_market_link(
+                        item.name, league_name, locale="cn"
+                    )
+                    if league_name
+                    else None
+                )
+            except Exception:
+                market_link = None
+            replies.append(
+                format_unique_item_price_reply(
+                    item,
+                    market_url=market_link.url if market_link else None,
+                    article_url=(
+                        market_link.article_url
+                        if market_link and market_link.article_url
+                        else None
+                    ),
+                )
+            )
+
+        if len(items) > 1:
+            yield event.plain_result(
+                "找到多个同名传奇物品，请按底材区分：\n\n" + "\n\n".join(replies)
+            )
+        else:
+            yield event.plain_result(replies[0])
+        for item in items[:5]:
+            if item.icon_url:
+                yield event.image_result(item.icon_url)
+
     async def _price_result(self, event: AstrMessageEvent, market: str):
         image_path = self._price_images.get(market)
         if not image_path:
@@ -1443,6 +1514,7 @@ class Poe2DBPlugin(Star):
                 "/poe2 问题\n"
                 "/poe2 国际服物价\n"
                 "/poe2 国服物价\n"
+                "/poe2价 传奇名\n"
                 "/poe2bd 角色名\n"
                 "/poe2分析 角色名\n"
                 "/poe2分析 链接\n"

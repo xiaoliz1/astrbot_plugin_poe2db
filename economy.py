@@ -23,6 +23,7 @@ USER_AGENT = "AstrBot-PoE2DB/1.13.0 (+https://github.com/xiaoliz1/astrbot_plugin
 MAX_JSON_BYTES = 2_000_000
 LEAGUES_CACHE_SECONDS = 300
 PRICES_CACHE_SECONDS = 1800
+UNIQUE_ITEM_PRICE_CACHE_SECONDS = 60
 IMAGE_ROWS = 50
 SCOUT_PAGE_SIZE = 100
 SCOUT_DATA_POINTS = 7
@@ -80,6 +81,30 @@ class CurrencySnapshot:
     market: str = "国际服"
     category_label: str = ""
     source_updated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class UniqueItemPrice:
+    """A current unique-item quote and its available seven-day price points."""
+
+    name: str
+    text: str
+    chinese_name: str | None
+    base_type: str | None
+    current_price: float | None
+    current_quantity: int | None
+    icon_url: str | None
+    implicit_mods: tuple[str, ...]
+    explicit_mods: tuple[str, ...]
+    price_history: tuple[float, ...]
+    poe2db_url: str | None
+
+
+UNIQUE_ITEM_QUERY_ALIASES = {
+    "魔血": ("Mageblood",),
+    "魔血腰带": ("Mageblood",),
+    "法师之血": ("Mageblood",),
+}
 
 
 def _finite_number(value: object) -> float | None:
@@ -152,6 +177,191 @@ SCOUT_ITEM_NAME_EN_TO_ZH, SCOUT_ITEM_NAME_ZH_TO_EN = _load_builtin_item_name_fal
 def scout_item_english_names(chinese_name: str) -> tuple[str, ...]:
     """Return Poe2Scout English labels for an exact bundled Chinese item name."""
     return SCOUT_ITEM_NAME_ZH_TO_EN.get(_chinese_name_key(chinese_name), ())
+
+
+def _load_builtin_item_references(
+    path: Path | None = None,
+) -> dict[str, tuple[str, str]]:
+    """Load unambiguous Poe2DB Simplified Chinese pages by English item name."""
+    source_path = path or Path(__file__).with_name("item_name_fallback.json")
+    try:
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    rows = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return {}
+
+    candidates: dict[str, set[tuple[str, str]]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        chinese = row.get("chinese")
+        article_url = row.get("poe2db_url")
+        if not isinstance(chinese, str) or not chinese.strip():
+            continue
+        if not isinstance(article_url, str):
+            continue
+        try:
+            parts = urlsplit(article_url)
+        except ValueError:
+            continue
+        if (
+            parts.scheme != "https"
+            or parts.hostname != "poe2db.tw"
+            or parts.username is not None
+            or parts.password is not None
+            or parts.port is not None
+            or not parts.path.startswith("/cn/")
+            or parts.query
+            or parts.fragment
+        ):
+            continue
+        for english in (row.get("english"), row.get("name")):
+            if isinstance(english, str) and english.strip():
+                candidates.setdefault(currency_key(english), set()).add(
+                    (chinese.strip(), article_url)
+                )
+    return {
+        key: next(iter(values))
+        for key, values in candidates.items()
+        if key and len(values) == 1
+    }
+
+
+SCOUT_ITEM_REFERENCES = _load_builtin_item_references()
+
+
+def scout_item_reference(english_name: str) -> tuple[str, str] | None:
+    """Return a bundled Chinese title and article URL for an exact item name."""
+    return SCOUT_ITEM_REFERENCES.get(currency_key(english_name))
+
+
+def _safe_item_mods(value: object, limit: int = 8) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    mods: list[str] = []
+    for candidate in value:
+        if not isinstance(candidate, str):
+            continue
+        mod = " ".join("".join(char for char in candidate if char.isprintable()).split())
+        if mod and len(mod) <= 240:
+            mods.append(mod)
+        if len(mods) >= limit:
+            break
+    return tuple(mods)
+
+
+def _parse_unique_item(item: object) -> UniqueItemPrice | None:
+    if not isinstance(item, dict):
+        return None
+    name = item.get("Name")
+    text = item.get("Text")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    if not isinstance(text, str) or not text.strip():
+        text = name
+    name = name.strip()[:100]
+    text = text.strip()[:160]
+    metadata = item.get("ItemMetadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    reference = scout_item_reference(name) or scout_item_reference(text)
+    chinese_name = reference[0] if reference else SCOUT_ITEM_NAME_EN_TO_ZH.get(currency_key(text))
+    current_price = _finite_number(item.get("CurrentPrice"))
+    if current_price is not None and current_price <= 0:
+        current_price = None
+    quantity = item.get("CurrentQuantity")
+    if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 0:
+        quantity = None
+    logs = item.get("PriceLogs")
+    history: list[tuple[float | None, int, float]] = []
+    if isinstance(logs, list):
+        for index, log in enumerate(logs[:7]):
+            if not isinstance(log, dict):
+                continue
+            price = _finite_number(log.get("Price"))
+            if price is None or price <= 0:
+                continue
+            history.append((_parse_timestamp(log.get("Time")), index, price))
+    if history and all(timestamp is not None for timestamp, _, _ in history):
+        history.sort(key=lambda entry: entry[0])
+    else:
+        # Poe2Scout returns its latest price log first when timestamps are absent.
+        history.reverse()
+    base_type = item.get("Type")
+    if not isinstance(base_type, str) or not base_type.strip():
+        base_type = metadata.get("base_type")
+    if not isinstance(base_type, str) or not base_type.strip():
+        base_type = None
+    return UniqueItemPrice(
+        name=name,
+        text=text,
+        chinese_name=chinese_name if isinstance(chinese_name, str) else None,
+        base_type=base_type.strip()[:100] if base_type else None,
+        current_price=current_price,
+        current_quantity=quantity,
+        icon_url=safe_currency_icon_url(item.get("IconUrl")),
+        implicit_mods=_safe_item_mods(metadata.get("implicit_mods")),
+        explicit_mods=_safe_item_mods(metadata.get("explicit_mods")),
+        price_history=tuple(entry[2] for entry in history),
+        poe2db_url=reference[1] if reference else None,
+    )
+
+
+def _format_unique_price(value: float) -> str:
+    if value >= 1000:
+        return f"{value:,.2f}"
+    if value >= 10:
+        return f"{value:.1f}"
+    if value >= 1:
+        return f"{value:.2f}"
+    if value >= 0.1:
+        return f"{value:.3f}"
+    return f"{value:.5f}"
+
+
+def _format_price_history(values: tuple[float, ...]) -> str:
+    if len(values) < 2:
+        return "暂无足够的 7 日历史报价"
+    bars = "▁▂▃▄▅▆▇█"
+    low, high = min(values), max(values)
+    span = high - low
+    sparkline = "".join(
+        bars[0]
+        if span == 0
+        else bars[min(7, max(0, round((value - low) * 7 / span)))]
+        for value in values
+    )
+    change = (values[-1] / values[0] - 1) * 100 if values[0] else 0.0
+    return f"{sparkline}（{change:+.1f}%）"
+
+
+def format_unique_item_price_reply(
+    item: UniqueItemPrice,
+    market_url: str | None = None,
+    article_url: str | None = None,
+) -> str:
+    """Format a concise Chinese single-item price reply."""
+    title = item.chinese_name or item.name
+    if title.casefold() != item.name.casefold():
+        title += f"（{item.name}）"
+    price = "暂无报价" if item.current_price is None else f"{_format_unique_price(item.current_price)} 神圣石"
+    quantity = "暂无数据" if item.current_quantity is None else f"{item.current_quantity:,} 件"
+    lines = [
+        title,
+        f"国际服当前价：{price}｜在售：{quantity}",
+        f"7 日走势：{_format_price_history(item.price_history)}",
+    ]
+    mods = [*item.implicit_mods[:2], *item.explicit_mods[:6]]
+    lines.append("主要词缀：" + ("；".join(mods) if mods else "暂无资料"))
+    article_url = article_url or item.poe2db_url
+    if article_url:
+        lines.append(f"Poe2DB 中文词条：{article_url}")
+    if market_url:
+        lines.append(f"国服市集：{market_url}")
+    else:
+        lines.append("国服市集：暂未找到可用链接")
+    return "\n".join(lines)
 
 
 def safe_currency_icon_url(value: object) -> str | None:
@@ -271,7 +481,7 @@ class Poe2ScoutEconomyClient:
         if parts.path == "/poe2/Leagues":
             return not parts.query
         match = re.fullmatch(
-            r"/poe2/Leagues/([^/]+)/(Items/Categories|ReferenceCurrencies|Currencies/ByCategory)",
+            r"/poe2/Leagues/([^/]+)/(Items/Categories|ReferenceCurrencies|Currencies/ByCategory|Uniques/ByCategory)",
             parts.path,
         )
         if not match:
@@ -300,11 +510,21 @@ class Poe2ScoutEconomyClient:
             "frequencyHours",
             "referenceCurrency",
         }
+        if endpoint == "Uniques/ByCategory":
+            required.add("search")
         if set(params) != required or any(len(values) != 1 for values in params.values()):
             return False
         category = params["category"][0]
         if not _CATEGORY_API_ID.fullmatch(category) or params["referenceCurrency"][0] != "divine":
             return False
+        if endpoint == "Uniques/ByCategory":
+            search = params["search"][0].strip()
+            if (
+                not search
+                or len(search) > 100
+                or any(ord(character) < 32 for character in search)
+            ):
+                return False
         try:
             page = int(params["page"][0])
             per_page = int(params["perPage"][0])
@@ -318,6 +538,89 @@ class Poe2ScoutEconomyClient:
             and 1 <= data_points <= 30
             and 1 <= frequency_hours <= 168
         )
+
+    async def unique_item_prices(
+        self, query: str, force_refresh: bool = False
+    ) -> tuple[UniqueItemPrice, ...]:
+        """Find exact unique-item matches with current Divine prices and history."""
+        query = " ".join(query.strip().split())
+        if not query or len(query) > 80 or "://" in query:
+            raise EconomyError("请提供 1–80 字的传奇物品名称")
+        if any(ord(character) < 32 for character in query):
+            raise EconomyError("物品名称中包含无效字符")
+
+        normalized = _chinese_name_key(query)
+        alias_terms = next(
+            (
+                terms
+                for alias, terms in UNIQUE_ITEM_QUERY_ALIASES.items()
+                if _chinese_name_key(alias) == normalized
+            ),
+            (),
+        )
+        search_terms = alias_terms or scout_item_english_names(query) or (query,)
+        league_name = await self._current_league(force_refresh)
+        league_path = quote(league_name, safe="")
+        categories_url = (
+            f"{SCOUT_API_BASE}/poe2/Leagues/{league_path}/Items/Categories"
+        )
+        categories_payload = await self._get_json(
+            categories_url, LEAGUES_CACHE_SECONDS, force_refresh
+        )
+        categories = (
+            categories_payload.get("UniqueCategories")
+            if isinstance(categories_payload, dict)
+            else None
+        )
+        valid_categories = [
+            category["ApiId"]
+            for category in categories or []
+            if isinstance(category, dict)
+            and isinstance(category.get("ApiId"), str)
+            and _CATEGORY_API_ID.fullmatch(category["ApiId"])
+        ]
+        if not valid_categories:
+            raise EconomyError("Poe2Scout 没有提供可查询的传奇物品分类")
+
+        exact: dict[tuple[str, str | None, str], UniqueItemPrice] = {}
+        for search_term in search_terms[:3]:
+            for category in valid_categories:
+                params = urlencode(
+                    {
+                        "category": category,
+                        "page": 1,
+                        "perPage": 100,
+                        "dataPoints": 7,
+                        "frequencyHours": 24,
+                        "referenceCurrency": "divine",
+                        "search": search_term,
+                    }
+                )
+                url = (
+                    f"{SCOUT_API_BASE}/poe2/Leagues/{league_path}"
+                    f"/Uniques/ByCategory?{params}"
+                )
+                payload = await self._get_json(
+                    url, UNIQUE_ITEM_PRICE_CACHE_SECONDS, force_refresh
+                )
+                raw_items = payload.get("Items") if isinstance(payload, dict) else None
+                if not isinstance(raw_items, list):
+                    raise EconomyError("Poe2Scout 传奇物品数据格式不正确")
+                target = currency_key(search_term)
+                for raw_item in raw_items:
+                    parsed = _parse_unique_item(raw_item)
+                    if parsed is None:
+                        continue
+                    if target not in {
+                        currency_key(parsed.name),
+                        currency_key(parsed.text),
+                    }:
+                        continue
+                    exact[(parsed.name.casefold(), parsed.base_type, parsed.text.casefold())] = parsed
+
+        if not exact:
+            raise EconomyError("没有找到精确匹配的传奇物品，请检查名称或尝试英文名")
+        return tuple(exact.values())
 
     def _download_sync(self, url: str) -> Any:
         if not self._allowed(url):

@@ -17,11 +17,14 @@ from astrbot_plugin_poe2db.economy import (
     CurrencyRow,
     CurrencySnapshot,
     Poe2ScoutEconomyClient,
+    UniqueItemPrice,
+    format_unique_item_price_reply,
     localize_currency_snapshot,
     parse_scout_currency_page,
     render_currency_html,
     safe_currency_icon_url,
     scout_item_english_names,
+    scout_item_reference,
 )
 
 
@@ -69,6 +72,13 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             allowed(
+                f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/Uniques/ByCategory"
+                "?category=accessory&page=1&perPage=100&dataPoints=7&frequencyHours=24"
+                "&referenceCurrency=divine&search=Mageblood"
+            )
+        )
+        self.assertTrue(
+            allowed(
                 f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/ReferenceCurrencies"
             )
         )
@@ -87,6 +97,20 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
                 f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/Currencies/ByCategory"
                 "?category=currency&page=1&perPage=100&dataPoints=7&frequencyHours=24"
                 "&referenceCurrency=exalted"
+            )
+        )
+        self.assertFalse(
+            allowed(
+                f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/Uniques/ByCategory"
+                "?category=accessory&page=1&perPage=100&dataPoints=7&frequencyHours=24"
+                "&referenceCurrency=exalted&search=Mageblood"
+            )
+        )
+        self.assertFalse(
+            allowed(
+                f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/Uniques/ByCategory"
+                "?category=accessory&page=1&perPage=100&dataPoints=7&frequencyHours=24"
+                "&referenceCurrency=divine&search=" + "x" * 101
             )
         )
         self.assertFalse(
@@ -176,6 +200,86 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(EconomyError):
             await FixtureClient().current_economy()
+
+    async def test_unique_item_price_search_uses_divine_and_resolves_chinese_alias(self):
+        item = {
+            "Name": "Mageblood",
+            "Text": "Mageblood Utility Belt",
+            "Type": "Utility Belt",
+            "IconUrl": "/gen/image/Mageblood.png",
+            "CurrentPrice": 179.5,
+            "CurrentQuantity": 42,
+            "PriceLogs": [
+                {"Price": 179.5, "Time": "2026-10-18T00:00:00Z"},
+                {"Price": 160.0, "Time": "2026-10-17T00:00:00Z"},
+            ],
+            "ItemMetadata": {
+                "base_type": "Utility Belt",
+                "implicit_mods": ["Has (1-3) Charm Slots"],
+                "explicit_mods": ["Legacy of Topaz", "Legacy of Sulphur"],
+            },
+        }
+
+        class FixtureClient(Poe2ScoutEconomyClient):
+            async def _current_league(self, force_refresh=False):
+                return "Forbidden Rites"
+
+            async def _get_json(self, url, cache_seconds, force_refresh=False):
+                if url.endswith("/Items/Categories"):
+                    return {
+                        "UniqueCategories": [
+                            {"ApiId": "accessory"},
+                            {"ApiId": "armour"},
+                            {"ApiId": "weapon"},
+                        ]
+                    }
+                query = parse_qs(urlsplit(url).query)
+                self.assertion = query
+                if query["referenceCurrency"] != ["divine"]:
+                    raise AssertionError("unique quotes must use Divine Orbs")
+                if query["search"] != ["Mageblood"]:
+                    raise AssertionError("Chinese alias was not resolved")
+                return {"Items": [item] if query["category"] == ["accessory"] else []}
+
+        client = FixtureClient()
+        items = await client.unique_item_prices("魔血")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].name, "Mageblood")
+        self.assertEqual(items[0].chinese_name, "法师之血 万用腰带")
+        self.assertEqual(items[0].current_price, 179.5)
+        self.assertEqual(items[0].current_quantity, 42)
+        self.assertEqual(items[0].price_history, (160.0, 179.5))
+        self.assertEqual(items[0].implicit_mods, ("Has (1-3) Charm Slots",))
+        self.assertEqual(items[0].icon_url, "https://web.poecdn.com/gen/image/Mageblood.png")
+
+    def test_unique_item_reply_formats_price_history_mods_and_market_links(self):
+        item = UniqueItemPrice(
+            name="Mageblood",
+            text="Mageblood Utility Belt",
+            chinese_name="法师之血 万用腰带",
+            base_type="Utility Belt",
+            current_price=179.5,
+            current_quantity=42,
+            icon_url=None,
+            implicit_mods=("Has (1-3) Charm Slots",),
+            explicit_mods=("Legacy of Topaz",),
+            price_history=(160.0, 179.5),
+            poe2db_url="https://poe2db.tw/cn/Mageblood",
+        )
+
+        reply = format_unique_item_price_reply(
+            item,
+            market_url="https://trade.example/market",
+            article_url="https://poe2db.tw/cn/Mageblood",
+        )
+
+        self.assertIn("国际服当前价：179.5 神圣石", reply)
+        self.assertIn("在售：42 件", reply)
+        self.assertIn("7 日走势：", reply)
+        self.assertIn("主要词缀：Has (1-3) Charm Slots；Legacy of Topaz", reply)
+        self.assertIn("https://poe2db.tw/cn/Mageblood", reply)
+        self.assertIn("https://trade.example/market", reply)
+        self.assertEqual(scout_item_reference("Mageblood"), ("法师之血 万用腰带", "https://poe2db.tw/cn/Mageblood"))
 
     def test_price_parser_reads_logs_oldest_first_and_normalizes_cdn_icon(self):
         rows, pages = parse_scout_currency_page(

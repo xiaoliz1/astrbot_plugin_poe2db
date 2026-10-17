@@ -42,6 +42,7 @@ class MarketLink:
     item_name: str
     chinese_name: str | None
     url: str
+    article_url: str | None = None
 
 
 def search_url(term: str, locale: str = "cn") -> str:
@@ -384,7 +385,9 @@ class Poe2DBClient:
                         urljoin(chinese_url, market_href), chinese_name
                     )
                     if market_url:
-                        return MarketLink(name, chinese_name, market_url)
+                        return MarketLink(
+                            name, chinese_name, market_url, article_url=chinese_url
+                        )
                     continue
 
                 market_href = self._market_href_from_item_page(article_soup)

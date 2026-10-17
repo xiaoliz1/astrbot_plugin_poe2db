@@ -273,6 +273,7 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.chinese_name, "法师之血")
         self.assertEqual(result.url, cn_trade_url)
+        self.assertEqual(result.article_url, cn_url)
 
     async def test_national_market_lookup_does_not_fall_back_to_international_market(self):
         item_name = "Mageblood"
