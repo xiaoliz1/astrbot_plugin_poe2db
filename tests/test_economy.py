@@ -1,4 +1,4 @@
-"""Current league selection, price parsing, and image markup safety."""
+"""Poe2Scout price acquisition, conversion, and image markup safety."""
 
 import sys
 import unittest
@@ -9,150 +9,215 @@ from urllib.parse import parse_qs, urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_poe2db.economy import (
-    EXCHANGE_CATEGORIES,
     EconomyError,
     LEAGUES_URL,
+    SCOUT_API_BASE,
     CurrencyRow,
     CurrencySnapshot,
-    NinjaEconomyClient,
+    Poe2ScoutEconomyClient,
     localize_currency_snapshot,
-    parse_currency_overview,
+    parse_scout_currency_page,
     render_currency_html,
+    safe_currency_icon_url,
 )
 
 
-def overview():
+def scout_item(api_id, name, price, logs=None, icon="/gen/image/item.webp"):
     return {
-        "core": {"primary": "divine", "items": [{"id": "divine", "name": "Divine Orb"}]},
-        "items": [
-            {
-                "id": "mirror",
-                "name": "Mirror of Kalandra",
-                "detailsId": "mirror-of-kalandra",
-                "image": "/gen/image/mirror.webp",
-            },
-            {"id": "chaos", "name": "Chaos Orb", "image": "/gen/image/chaos.webp"},
-            {"id": "invalid", "name": "Invalid"},
-        ],
-        "lines": [
-            {"id": "chaos", "primaryValue": 0.1, "sparkline": {"totalChange": -2, "data": [-1, -2]}},
-            {"id": "mirror", "primaryValue": 5000, "sparkline": {"totalChange": 4, "data": [0, 4]}},
-            {"id": "invalid", "primaryValue": 0},
-        ],
+        "ApiId": api_id,
+        "Text": name,
+        "CurrentPrice": price,
+        "PriceLogs": logs or [],
+        "IconUrl": icon,
     }
 
 
-class EconomyTests(unittest.IsolatedAsyncioTestCase):
-    async def test_current_league_id_is_used_and_can_change(self):
-        class FixtureClient(NinjaEconomyClient):
-            def __init__(self):
-                super().__init__()
-                self.league = "Forbidden Rites"
-                self.urls = []
+def scout_page(items, pages=1, current_page=1):
+    return {"CurrentPage": current_page, "Pages": pages, "Total": len(items), "Items": items}
 
+
+class EconomyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_current_season_uses_is_current_and_encodes_league_path(self):
+        class FixtureClient(Poe2ScoutEconomyClient):
             async def _get_json(self, url, cache_seconds, force_refresh=False):
-                self.urls.append(url)
-                if url.endswith("/leagues"):
-                    return [{"id": self.league, "name": self.league}]
-                return overview()
+                self.url = url
+                return [
+                    {"Value": "Old Season", "IsCurrent": False},
+                    {"Value": "Forbidden Rites", "IsCurrent": True},
+                ]
 
         client = FixtureClient()
-        first = await client.current_currency()
-        self.assertEqual(first.league, "Forbidden Rites")
-        self.assertEqual(first.reference, "Divine Orb")
-        self.assertEqual([row.name for row in first.rows], ["Mirror of Kalandra", "Chaos Orb"])
-        self.assertEqual(parse_qs(urlsplit(client.urls[-1]).query), {"league": ["Forbidden Rites"], "type": ["Currency"]})
+        self.assertEqual(await client.current_league_name(), "Forbidden Rites")
+        self.assertEqual(client.url, LEAGUES_URL)
+        self.assertEqual(
+            client._allowed(
+                f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/Items/Categories"
+            ),
+            True,
+        )
 
-        client.league = "Future Season"
-        second = await client.current_currency()
-        self.assertEqual(second.league, "Future Season")
-        self.assertEqual(parse_qs(urlsplit(client.urls[-1]).query)["league"], ["Future Season"])
+    def test_only_expected_poe2scout_urls_and_divine_queries_are_allowed(self):
+        allowed = Poe2ScoutEconomyClient._allowed
+        self.assertTrue(allowed(LEAGUES_URL))
+        self.assertTrue(
+            allowed(
+                f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/Items/Categories"
+            )
+        )
+        self.assertTrue(
+            allowed(
+                f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/ReferenceCurrencies"
+            )
+        )
+        self.assertTrue(
+            allowed(
+                f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/Currencies/ByCategory"
+                "?category=currency&page=1&perPage=100&dataPoints=7&frequencyHours=24"
+                "&referenceCurrency=divine"
+            )
+        )
+        self.assertFalse(allowed("https://api.poe2scout.com.evil.test/poe2/Leagues"))
+        self.assertFalse(allowed("http://api.poe2scout.com/poe2/Leagues"))
+        self.assertFalse(allowed("https://api.poe2scout.com/poe1/Leagues"))
+        self.assertFalse(
+            allowed(
+                f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/Currencies/ByCategory"
+                "?category=currency&page=1&perPage=100&dataPoints=7&frequencyHours=24"
+                "&referenceCurrency=exalted"
+            )
+        )
+        self.assertFalse(
+            allowed(
+                f"{SCOUT_API_BASE}/poe2/Leagues/Forbidden%20Rites/Currencies/ByCategory"
+                "?category=currency&page=1&perPage=100&referenceCurrency=divine"
+            )
+        )
 
-    def test_only_poe_ninja_currency_api_urls_are_allowed(self):
-        allowed = NinjaEconomyClient._allowed
-        self.assertTrue(allowed("https://poe.ninja/poe2/api/economy/leagues"))
-        self.assertTrue(allowed("https://poe.ninja/poe2/api/economy/exchange/current/overview?league=Forbidden+Rites&type=Currency"))
-        self.assertTrue(allowed("https://poe.ninja/poe2/api/economy/exchange/current/overview?league=Forbidden+Rites&type=Fragments"))
-        self.assertTrue(allowed("https://poe.ninja/poe2/api/economy/exchange/current/overview?league=Forbidden+Rites&type=Verisium"))
-        self.assertFalse(allowed("https://poe.ninja.evil.test/poe2/api/economy/leagues"))
-        self.assertFalse(allowed("https://poe.ninja/poe1/api/economy/leagues"))
-        self.assertFalse(allowed("https://poe.ninja/poe2/api/economy/exchange/current/overview?league=Wrong&type=NotAType"))
-
-    async def test_current_economy_merges_all_categories_in_divine_order(self):
-        class FixtureClient(NinjaEconomyClient):
+    async def test_current_economy_paginates_dynamic_categories_and_sorts_divine_quotes(self):
+        class FixtureClient(Poe2ScoutEconomyClient):
             def __init__(self):
                 super().__init__()
-                self.requests = []
+                self.urls = []
 
             async def _current_league(self, force_refresh=False):
-                return "Forbidden Rites", "Forbidden Rites"
+                return "Forbidden Rites"
 
             async def _get_json(self, url, cache_seconds, force_refresh=False):
-                from urllib.parse import parse_qs, urlsplit
-
-                exchange_type = parse_qs(urlsplit(url).query)["type"][0]
-                self.requests.append((exchange_type, force_refresh))
-                index = next(
-                    i for i, category in enumerate(EXCHANGE_CATEGORIES)
-                    if category[0] == exchange_type
-                )
-                item_id = f"item-{exchange_type}"
-                return {
-                    "core": {
-                        "primary": "divine",
-                        "items": [{"id": "divine", "name": "Divine Orb"}],
-                    },
-                    "items": [{
-                        "id": item_id,
-                        "name": f"{exchange_type} item",
-                        "detailsId": f"{exchange_type.lower()}-item",
-                    }],
-                    "lines": [{"id": item_id, "primaryValue": index + 1}],
-                }
+                self.urls.append((url, force_refresh))
+                if url.endswith("/ReferenceCurrencies"):
+                    return [{"ApiId": "exalted"}, {"ApiId": "divine"}]
+                if url.endswith("/Items/Categories"):
+                    return {
+                        "CurrencyCategories": [
+                            {"ApiId": "currency", "Label": "Currency"},
+                            {"ApiId": "runes", "Label": "Runes"},
+                        ]
+                    }
+                query = parse_qs(urlsplit(url).query)
+                category = query["category"][0]
+                page = int(query["page"][0])
+                if query["referenceCurrency"] != ["divine"] or query["dataPoints"] != ["7"]:
+                    raise AssertionError("price requests must use divine and 7 data points")
+                if category == "currency" and page == 1:
+                    return scout_page(
+                        [
+                            scout_item("divine", "Divine Orb", 1),
+                            scout_item("chaos", "Chaos Orb", 0.2),
+                        ],
+                        pages=2,
+                    )
+                if category == "currency" and page == 2:
+                    return scout_page([scout_item("mirror", "Mirror of Kalandra", 5000)], pages=2, current_page=2)
+                return scout_page([scout_item("rune", "Greater Rune", 3)])
 
         client = FixtureClient()
         snapshot = await client.current_economy(force_refresh=True)
-        self.assertEqual(len(EXCHANGE_CATEGORIES), 14)
-        self.assertEqual(snapshot.total_count, 14)
-        self.assertEqual(len(client.requests), 14)
-        self.assertTrue(all(force for _, force in client.requests))
-        self.assertEqual(
-            [row.value for row in snapshot.rows],
-            sorted((row.value for row in snapshot.rows), reverse=True),
-        )
-        self.assertEqual(snapshot.rows[0].category, EXCHANGE_CATEGORIES[-1][1])
-        self.assertEqual(EXCHANGE_CATEGORIES[-1], ("Verisium", ""))
+        self.assertEqual(snapshot.league, "Forbidden Rites")
         self.assertEqual(snapshot.reference, "Divine Orb")
-
-    def test_empty_price_data_is_not_a_valid_snapshot(self):
-        with self.assertRaises(EconomyError):
-            parse_currency_overview("Future Season", {"core": {"primary": "divine"}, "items": [], "lines": []})
-        malformed = overview()
-        malformed["core"]["items"] = 12
-        with self.assertRaises(EconomyError):
-            parse_currency_overview("Future Season", malformed)
-
-        non_divine = overview()
-        non_divine["core"] = {
-            "primary": "chaos",
-            "items": [{"id": "chaos", "name": "Chaos Orb"}],
-        }
-        with self.assertRaises(EconomyError):
-            parse_currency_overview("Future Season", non_divine, require_divine=True)
-
-    def test_empty_exchange_category_can_be_skipped_in_merged_snapshot(self):
-        payload = overview()
-        payload["items"] = []
-        payload["lines"] = []
-        snapshot = parse_currency_overview(
-            "Future Season",
-            payload,
-            category_label="雕像",
-            require_divine=True,
-            allow_empty=True,
+        self.assertEqual(snapshot.total_count, 4)
+        self.assertEqual([row.value for row in snapshot.rows], [5000, 3, 1, 0.2])
+        self.assertEqual(snapshot.rows[0].category, "通货")
+        self.assertEqual(snapshot.rows[1].category, "符文")
+        self.assertEqual(snapshot.rows[-1].sort_key, "chaos")
+        price_urls = [url for url, _ in client.urls if "/Currencies/ByCategory?" in url]
+        self.assertEqual(len(price_urls), 3)
+        self.assertTrue(all(force for _, force in client.urls))
+        self.assertEqual(
+            parse_qs(urlsplit(price_urls[0]).query)["referenceCurrency"], ["divine"]
         )
-        self.assertEqual(snapshot.rows, ())
-        self.assertEqual(snapshot.total_count, 0)
+
+    async def test_current_economy_rejects_unavailable_divine_reference(self):
+        class FixtureClient(Poe2ScoutEconomyClient):
+            async def _current_league(self, force_refresh=False):
+                return "Forbidden Rites"
+
+            async def _get_json(self, url, cache_seconds, force_refresh=False):
+                if url.endswith("/ReferenceCurrencies"):
+                    return [{"ApiId": "exalted"}]
+                raise AssertionError("must stop before fetching prices")
+
+        with self.assertRaises(EconomyError):
+            await FixtureClient().current_economy()
+
+    async def test_current_economy_rejects_non_divine_response(self):
+        class FixtureClient(Poe2ScoutEconomyClient):
+            async def _current_league(self, force_refresh=False):
+                return "Forbidden Rites"
+
+            async def _get_json(self, url, cache_seconds, force_refresh=False):
+                if url.endswith("/ReferenceCurrencies"):
+                    return [{"ApiId": "divine"}]
+                if url.endswith("/Items/Categories"):
+                    return {"CurrencyCategories": [{"ApiId": "currency", "Label": "Currency"}]}
+                return scout_page([scout_item("divine", "Divine Orb", 853.8)])
+
+        with self.assertRaises(EconomyError):
+            await FixtureClient().current_economy()
+
+    def test_price_parser_reads_logs_oldest_first_and_normalizes_cdn_icon(self):
+        rows, pages = parse_scout_currency_page(
+            "Forbidden Rites",
+            scout_page(
+                [
+                    scout_item(
+                        "mirror-of-kalandra",
+                        "Mirror of Kalandra",
+                        5000,
+                        logs=[
+                            {"Price": 5000, "Time": "2026-10-17T00:00:00Z"},
+                            {"Price": 4000, "Time": "2026-10-16T00:00:00Z"},
+                            {"Price": 3000, "Time": "2026-10-15T00:00:00Z"},
+                        ],
+                        icon="https://web.poecdn.com//gen/image/mirror.webp",
+                    )
+                ],
+                pages=4,
+            ),
+            "通货",
+        )
+        self.assertEqual(pages, 4)
+        self.assertEqual(rows[0].trend, (3000, 4000, 5000))
+        self.assertAlmostEqual(rows[0].change_percent, (5000 / 3000 - 1) * 100)
+        self.assertEqual(rows[0].icon_url, "https://web.poecdn.com/gen/image/mirror.webp")
+        self.assertEqual(rows[0].sort_key, "mirrorofkalandra")
+
+    def test_invalid_price_payloads_are_rejected_or_skipped(self):
+        with self.assertRaises(EconomyError):
+            parse_scout_currency_page("Season", {"Items": []})
+        with self.assertRaises(EconomyError):
+            parse_scout_currency_page("Season", scout_page([], pages="many"))
+        rows, _ = parse_scout_currency_page(
+            "Season",
+            scout_page(
+                [
+                    scout_item("zero", "Zero", 0),
+                    scout_item("nan", "NaN", float("nan")),
+                    scout_item("missing", "Missing", None),
+                    {"ApiId": "no-name", "CurrentPrice": 5},
+                ]
+            ),
+        )
+        self.assertEqual(rows, [])
 
     def test_invalid_utf8_response_becomes_a_source_error(self):
         class Response:
@@ -176,12 +241,19 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("astrbot_plugin_poe2db.economy.build_opener", return_value=Opener()):
             with self.assertRaises(EconomyError):
-                NinjaEconomyClient()._download_sync(LEAGUES_URL)
+                Poe2ScoutEconomyClient()._download_sync(LEAGUES_URL)
 
     def test_image_markup_escapes_remote_names(self):
-        payload = overview()
-        payload["items"][0]["name"] = '<img src=x onerror=alert(1)>{{7*7}}'
-        snapshot = parse_currency_overview("Future <Season>", payload)
+        rows, _ = parse_scout_currency_page(
+            "Future <Season>",
+            scout_page(
+                [
+                    scout_item("mirror", '<img src=x onerror=alert(1)>{{7*7}}', 5000),
+                    scout_item("divine", "Divine Orb", 1),
+                ]
+            ),
+        )
+        snapshot = CurrencySnapshot("Future <Season>", "Divine Orb", tuple(rows), len(rows), "2026-10-13 12:00")
         markup = render_currency_html(snapshot)
         self.assertIn("Future &lt;Season&gt;", markup)
         self.assertIn("&lt;img src=x onerror=alert(1)&gt;&#123;&#123;7*7&#125;&#125;", markup)
@@ -189,14 +261,11 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Divine Orb", markup)
         self.assertIn("7 天趋势", markup)
         self.assertIn(
-            '<img class="item-icon" src="https://web.poecdn.com/gen/image/mirror.webp" alt="">',
+            '<img class="item-icon" src="https://web.poecdn.com/gen/image/item.webp" alt="">',
             markup,
         )
-        self.assertLess(markup.index('src="https://web.poecdn.com/gen/image/mirror.webp"'), markup.index("&#123;"))
 
-    def test_item_icon_urls_only_allow_the_price_source_image_hosts(self):
-        from astrbot_plugin_poe2db.economy import safe_currency_icon_url
-
+    def test_item_icon_urls_only_allow_price_source_image_hosts(self):
         self.assertEqual(
             safe_currency_icon_url("/gen/image/currency.webp"),
             "https://web.poecdn.com/gen/image/currency.webp",
@@ -205,7 +274,11 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
             safe_currency_icon_url("https://web.poecdn.com/gen/image/currency.webp"),
             "https://web.poecdn.com/gen/image/currency.webp",
         )
-        self.assertIsNone(safe_currency_icon_url("https://poe.ninja/gen/image/currency.webp"))
+        self.assertEqual(
+            safe_currency_icon_url("https://web.poecdn.com//gen/image/currency.webp"),
+            "https://web.poecdn.com/gen/image/currency.webp",
+        )
+        self.assertIsNone(safe_currency_icon_url("https://api.poe2scout.com/gen/image/item.webp"))
         self.assertEqual(
             safe_currency_icon_url("https://cdn.poe2db.tw/image/currency.webp"),
             "https://cdn.poe2db.tw/image/currency.webp",
@@ -227,11 +300,25 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("evil.example", markup)
         self.assertIn("测试物品", markup)
 
-    def test_currency_image_uses_chinese_names_and_units(self):
-        snapshot = parse_currency_overview("Forbidden Rites", overview())
+    def test_currency_image_localizes_names_and_keeps_divine_units(self):
+        rows, _ = parse_scout_currency_page(
+            "Forbidden Rites",
+            scout_page(
+                [
+                    scout_item("mirror", "Mirror of Kalandra", 5000),
+                    scout_item("chaos", "Chaos Orb", 0.1),
+                    scout_item("divine", "Divine Orb", 1),
+                ]
+            ),
+        )
+        snapshot = CurrencySnapshot("Forbidden Rites", "Divine Orb", tuple(rows), len(rows), "2026-10-13 12:00")
         localized = localize_currency_snapshot(
             snapshot,
-            {"mirrorofkalandra": "卡兰德的魔镜", "chaosorb": "混沌石", "divineorb": "神圣石"},
+            {
+                "mirrorofkalandra": ("卡兰德的魔镜", "通货"),
+                "chaosorb": ("混沌石", "通货"),
+                "divineorb": ("神圣石", "通货"),
+            },
             "禁断仪式",
         )
         markup = render_currency_html(localized)
@@ -240,17 +327,16 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         for term in ("Mirror of Kalandra", "Chaos Orb", "Divine Orb", "Forbidden Rites", "5.00k"):
             self.assertNotIn(term, markup)
 
-    def test_localizes_live_currency_names_and_categories(self):
-        payload = overview()
-        payload["items"][0]["detailsId"] = "mirror-of-kalandra"
-        snapshot = parse_currency_overview("Forbidden Rites", payload)
+    def test_localizes_categories_from_database_names(self):
+        rows, _ = parse_scout_currency_page(
+            "Forbidden Rites",
+            scout_page([scout_item("mirror", "Mirror of Kalandra", 5000)]),
+            "通货",
+        )
+        snapshot = CurrencySnapshot("Forbidden Rites", "Divine Orb", tuple(rows), 1, "2026-10-13 12:00")
         localized = localize_currency_snapshot(
             snapshot,
-            {
-                "divineorb": ("神圣石", "通货"),
-                "mirrorofkalandra": ("卡兰德的魔镜", "通货"),
-                "chaosorb": ("混沌石", "通货"),
-            },
+            {"mirror": ("卡兰德的魔镜", "通货")},
             "禁断仪式",
         )
         self.assertEqual(localized.rows[0].name, "卡兰德的魔镜")

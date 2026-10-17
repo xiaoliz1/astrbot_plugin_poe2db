@@ -1,4 +1,4 @@
-"""PoE2 economy snapshots from poe.ninja's public economy API."""
+"""PoE2 economy snapshots from Poe2Scout's public API."""
 
 from __future__ import annotations
 
@@ -12,35 +12,42 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, unquote, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-LEAGUES_URL = "https://poe.ninja/poe2/api/economy/leagues"
-OVERVIEW_URL = "https://poe.ninja/poe2/api/economy/exchange/current/overview"
+SCOUT_API_BASE = "https://api.poe2scout.com"
+LEAGUES_URL = f"{SCOUT_API_BASE}/poe2/Leagues"
 USER_AGENT = "AstrBot-PoE2DB/1.13.0 (+https://github.com/xiaoliz1/astrbot_plugin_poe2db)"
 MAX_JSON_BYTES = 2_000_000
 LEAGUES_CACHE_SECONDS = 300
 PRICES_CACHE_SECONDS = 1800
 IMAGE_ROWS = 50
+SCOUT_PAGE_SIZE = 100
+SCOUT_DATA_POINTS = 7
+SCOUT_FREQUENCY_HOURS = 24
 
-# poe.ninja's supported PoE2 exchange API types and their Chinese display labels.
-EXCHANGE_CATEGORIES = (
-    ("Currency", "通货"),
-    ("Fragments", "碎片"),
-    ("Ritual", "驱灵仪式"),
-    ("Essences", "精华"),
-    ("Breach", "裂隙"),
-    ("Delirium", "惊悸迷雾"),
-    ("Expedition", "先祖秘藏"),
-    ("Runes", "符文"),
-    ("SoulCores", "灵核"),
-    ("Idols", "雕像"),
-    ("UncutGems", "未切割的宝石"),
-    ("Abyss", "深渊"),
-    ("LineageSupportGems", "宝石"),
-    ("Verisium", ""),
-)
-EXCHANGE_TYPES = frozenset(category[0] for category in EXCHANGE_CATEGORIES)
+# Labels supplied by Poe2Scout are English. Keep the image table localized while
+# allowing the API to add categories without requiring a plugin update.
+SCOUT_CATEGORY_LABELS = {
+    "currency": "通货",
+    "fragments": "碎片",
+    "runes": "符文",
+    "essences": "精华",
+    "ultimatum": "灵核",
+    "expedition": "先祖秘藏",
+    "ritual": "驱灵仪式",
+    "vaultkeys": "圣物箱钥匙",
+    "breach": "裂隙",
+    "abyss": "深渊",
+    "uncutgems": "未切割的宝石",
+    "lineagesupportgems": "辅助宝石",
+    "delirium": "惊悸迷雾",
+    "idol": "雕像",
+    "verisium": "Verisium",
+    "vaal": "瓦尔",
+}
+_CATEGORY_API_ID = re.compile(r"^[a-z0-9-]{1,60}$")
+_LEAGUE_PATH_SEGMENT = re.compile(r"^[^/?#]+$")
 
 
 class EconomyError(RuntimeError):
@@ -104,14 +111,19 @@ def safe_currency_icon_url(value: object) -> str | None:
     decoded_segments = [unquote(segment) for segment in parts.path.split("/")]
     if any(segment in {".", ".."} or "\\" in segment for segment in decoded_segments):
         return None
-    if not parts.scheme and not parts.netloc and parts.path.startswith("/gen/image/"):
-        return "https://web.poecdn.com" + parts.path
+    path = parts.path
+    # Poe2Scout currently emits web.poecdn.com URLs with a doubled slash before
+    # gen/image. Normalize only that known CDN prefix.
+    if path.startswith("//gen/image/"):
+        path = path[1:]
+    if not parts.scheme and not parts.netloc and path.startswith("/gen/image/"):
+        return "https://web.poecdn.com" + path
     if (
         parts.scheme == "https"
         and parts.hostname == "web.poecdn.com"
-        and parts.path.startswith("/gen/image/")
+        and path.startswith("/gen/image/")
     ):
-        return "https://web.poecdn.com" + parts.path
+        return "https://web.poecdn.com" + path
     if (
         parts.scheme == "https"
         and parts.hostname == "cdn.poe2db.tw"
@@ -165,12 +177,12 @@ def localize_currency_snapshot(
 
 class _AllowedRedirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not NinjaEconomyClient._allowed(newurl):
+        if not Poe2ScoutEconomyClient._allowed(newurl):
             raise EconomyError("物价接口跳转到了指定来源范围以外")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-class NinjaEconomyClient:
+class Poe2ScoutEconomyClient:
     def __init__(self, timeout_seconds: int = 15):
         self.timeout_seconds = timeout_seconds
         self._cache: dict[str, tuple[float, Any]] = {}
@@ -185,24 +197,62 @@ class NinjaEconomyClient:
             return False
         if (
             parts.scheme != "https"
-            or parts.hostname != "poe.ninja"
+            or parts.hostname != "api.poe2scout.com"
             or port is not None
             or parts.username is not None
             or parts.password is not None
             or parts.fragment
         ):
             return False
-        if parts.path == "/poe2/api/economy/leagues":
+        if parts.path == "/poe2/Leagues":
             return not parts.query
-        if parts.path != "/poe2/api/economy/exchange/current/overview":
+        match = re.fullmatch(
+            r"/poe2/Leagues/([^/]+)/(Items/Categories|ReferenceCurrencies|Currencies/ByCategory)",
+            parts.path,
+        )
+        if not match:
             return False
-        params = parse_qs(parts.query)
+        league_segment, endpoint = match.groups()
+        if not _LEAGUE_PATH_SEGMENT.fullmatch(league_segment):
+            return False
+        decoded_league = unquote(league_segment)
+        if (
+            not decoded_league
+            or len(decoded_league) > 100
+            or "/" in decoded_league
+            or "\\" in decoded_league
+            or decoded_league in {".", ".."}
+            or any(ord(character) < 32 for character in decoded_league)
+        ):
+            return False
+        if endpoint in {"Items/Categories", "ReferenceCurrencies"}:
+            return not parts.query
+        params = parse_qs(parts.query, keep_blank_values=True)
+        required = {
+            "category",
+            "page",
+            "perPage",
+            "dataPoints",
+            "frequencyHours",
+            "referenceCurrency",
+        }
+        if set(params) != required or any(len(values) != 1 for values in params.values()):
+            return False
+        category = params["category"][0]
+        if not _CATEGORY_API_ID.fullmatch(category) or params["referenceCurrency"][0] != "divine":
+            return False
+        try:
+            page = int(params["page"][0])
+            per_page = int(params["perPage"][0])
+            data_points = int(params["dataPoints"][0])
+            frequency_hours = int(params["frequencyHours"][0])
+        except ValueError:
+            return False
         return (
-            set(params) == {"league", "type"}
-            and len(params["league"]) == 1
-            and 0 < len(params["league"][0]) <= 100
-            and len(params["type"]) == 1
-            and params["type"][0] in EXCHANGE_TYPES
+            1 <= page <= 1000
+            and 1 <= per_page <= SCOUT_PAGE_SIZE
+            and 1 <= data_points <= 30
+            and 1 <= frequency_hours <= 168
         )
 
     def _download_sync(self, url: str) -> Any:
@@ -240,35 +290,85 @@ class NinjaEconomyClient:
                 return cached[1]
             result = await asyncio.to_thread(self._download_sync, url)
             self._cache[url] = (time.monotonic() + cache_seconds, result)
-            if len(self._cache) > 8:
+            if len(self._cache) > 256:
                 self._cache.pop(next(iter(self._cache)))
             return result
 
-    async def current_currency(self, force_refresh: bool = False) -> CurrencySnapshot:
-        league_id, league_name = await self._current_league(force_refresh)
-        url = OVERVIEW_URL + "?" + urlencode({"league": league_id, "type": "Currency"})
-        overview = await self._get_json(url, PRICES_CACHE_SECONDS, force_refresh)
-        return parse_currency_overview(league_name, overview)
-
     async def current_economy(self, force_refresh: bool = False) -> CurrencySnapshot:
-        """Fetch and merge the 14 exchange categories, quoted only in Divine Orbs."""
-        league_id, league_name = await self._current_league(force_refresh)
+        """Fetch current categories, requesting all prices in Divine Orbs."""
+        league_name = await self._current_league(force_refresh)
+        league_path = quote(league_name, safe="")
+        reference_url = f"{SCOUT_API_BASE}/poe2/Leagues/{league_path}/ReferenceCurrencies"
+        references = await self._get_json(
+            reference_url, LEAGUES_CACHE_SECONDS, force_refresh
+        )
+        if not isinstance(references, list) or not any(
+            isinstance(item, dict) and item.get("ApiId") == "divine"
+            for item in references
+        ):
+            raise EconomyError("Poe2Scout 当前赛季没有可用的神圣石报价基准")
+
+        categories_url = f"{SCOUT_API_BASE}/poe2/Leagues/{league_path}/Items/Categories"
+        categories_payload = await self._get_json(
+            categories_url, LEAGUES_CACHE_SECONDS, force_refresh
+        )
+        if not isinstance(categories_payload, dict):
+            raise EconomyError("Poe2Scout 经济分类数据格式不正确")
+        categories = categories_payload.get("CurrencyCategories")
+        if not isinstance(categories, list) or not categories:
+            raise EconomyError("Poe2Scout 当前赛季没有经济分类")
+
         rows: list[CurrencyRow] = []
-        for exchange_type, category_label in EXCHANGE_CATEGORIES:
-            url = OVERVIEW_URL + "?" + urlencode(
-                {"league": league_id, "type": exchange_type}
+        valid_categories = [
+            category
+            for category in categories
+            if isinstance(category, dict)
+            and isinstance(category.get("ApiId"), str)
+            and _CATEGORY_API_ID.fullmatch(category["ApiId"])
+        ]
+        if not valid_categories:
+            raise EconomyError("Poe2Scout 当前赛季没有可用的经济分类")
+
+        for category in valid_categories:
+            category_id = category["ApiId"]
+            source_label = category.get("Label")
+            category_label = SCOUT_CATEGORY_LABELS.get(
+                category_id,
+                source_label[:60] if isinstance(source_label, str) else category_id,
             )
-            overview = await self._get_json(
-                url, PRICES_CACHE_SECONDS, force_refresh=force_refresh
-            )
-            category_snapshot = parse_currency_overview(
-                league_name,
-                overview,
-                category_label=category_label,
-                require_divine=True,
-                allow_empty=True,
-            )
-            rows.extend(category_snapshot.rows)
+            page = 1
+            total_pages: int | None = None
+            while page <= (total_pages if total_pages is not None else 1):
+                query = urlencode(
+                    {
+                        "category": category_id,
+                        "page": page,
+                        "perPage": SCOUT_PAGE_SIZE,
+                        "dataPoints": SCOUT_DATA_POINTS,
+                        "frequencyHours": SCOUT_FREQUENCY_HOURS,
+                        "referenceCurrency": "divine",
+                    }
+                )
+                url = (
+                    f"{SCOUT_API_BASE}/poe2/Leagues/{league_path}"
+                    f"/Currencies/ByCategory?{query}"
+                )
+                payload = await self._get_json(
+                    url, PRICES_CACHE_SECONDS, force_refresh=force_refresh
+                )
+                category_rows, pages = parse_scout_currency_page(
+                    league_name, payload, category_label
+                )
+                if not isinstance(payload, dict) or payload.get("CurrentPage") != page:
+                    raise EconomyError("Poe2Scout 返回了错误的物价分页")
+                rows.extend(category_rows)
+                if total_pages is None:
+                    total_pages = pages
+                    if total_pages > 100:
+                        raise EconomyError("Poe2Scout 返回的分页数量超出安全上限")
+                elif pages != total_pages:
+                    raise EconomyError("Poe2Scout 经济分类分页信息不一致")
+                page += 1
 
         # A source item may appear in more than one economy category. Keep one
         # row per stable Poe2DB/Wiki slug, preferring its higher Divine quote.
@@ -282,7 +382,12 @@ class NinjaEconomyClient:
             sorted(unique_rows.values(), key=lambda row: (-row.value, row.name))
         )
         if not ordered_rows:
-            raise EconomyError("14 个经济分类中没有神圣石报价")
+            raise EconomyError("Poe2Scout 经济分类中没有神圣石报价")
+        divine = next(
+            (row for row in ordered_rows if row.sort_key == "divine"), None
+        )
+        if divine is None or not math.isclose(divine.value, 1.0, rel_tol=1e-5, abs_tol=1e-5):
+            raise EconomyError("Poe2Scout 没有按神圣石单位返回价格")
         return CurrencySnapshot(
             league=league_name[:100],
             reference="Divine Orb",
@@ -291,115 +396,106 @@ class NinjaEconomyClient:
             generated_at=datetime.now(timezone(timedelta(hours=8))).strftime(
                 "%Y-%m-%d %H:%M"
             ),
-            category_label="14 类经济物品",
+            category_label=f"{len(valid_categories)} 类经济物品",
         )
 
     async def current_league_name(self) -> str:
         """Return the current challenge league name without fetching price data."""
-        _, league_name = await self._current_league()
-        return league_name
+        return await self._current_league()
 
-    async def _current_league(self, force_refresh: bool = False) -> tuple[str, str]:
+    async def _current_league(self, force_refresh: bool = False) -> str:
         leagues = await self._get_json(
             LEAGUES_URL, LEAGUES_CACHE_SECONDS, force_refresh
         )
-        if not isinstance(leagues, list) or not leagues or not isinstance(leagues[0], dict):
+        if not isinstance(leagues, list):
             raise EconomyError("未取得当前赛季")
-        current = leagues[0]
-        league_id = current.get("id")
-        league_name = current.get("name")
-        if not isinstance(league_id, str) or not 0 < len(league_id.strip()) <= 100:
+        current = next(
+            (item for item in leagues if isinstance(item, dict) and item.get("IsCurrent") is True),
+            None,
+        )
+        if current is None:
+            raise EconomyError("Poe2Scout 未标记当前赛季")
+        league_name = current.get("Value")
+        if not isinstance(league_name, str) or not 0 < len(league_name.strip()) <= 100:
             raise EconomyError("当前赛季名称无效")
-        if not isinstance(league_name, str) or not league_name.strip():
-            league_name = league_id
-        return league_id.strip(), league_name.strip()
+        return league_name.strip()
 
 
-def parse_currency_overview(
-    league: str,
-    overview: object,
-    category_label: str = "",
-    require_divine: bool = False,
-    allow_empty: bool = False,
-) -> CurrencySnapshot:
-    if not isinstance(overview, dict):
-        raise EconomyError("通货数据格式不正确")
-    core = overview.get("core")
-    items = overview.get("items")
-    lines = overview.get("lines")
-    if not isinstance(core, dict) or not isinstance(items, list) or not isinstance(lines, list):
-        raise EconomyError("通货数据缺少物品或价格")
-    primary_id = core.get("primary")
-    if not isinstance(primary_id, str) or not primary_id:
-        raise EconomyError("通货数据缺少报价基准")
-    reference_items = core.get("items")
-    if not isinstance(reference_items, list):
-        raise EconomyError("通货数据缺少报价基准名称")
-    reference = primary_id
-    for item in reference_items:
-        if isinstance(item, dict) and item.get("id") == primary_id:
-            candidate = item.get("name")
-            if isinstance(candidate, str) and candidate:
-                reference = candidate
-            break
-    if require_divine and currency_key(reference) not in {"divine", "divineorb"}:
-        raise EconomyError("此经济分类不是以神圣石报价")
-    names = {
-        item["id"]: (item["name"], item.get("detailsId"), item.get("image"))
-        for item in items
-        if isinstance(item, dict)
-        and isinstance(item.get("id"), str)
-        and isinstance(item.get("name"), str)
-        and item["name"]
-    }
+def parse_scout_currency_page(
+    league: str, payload: object, category_label: str = ""
+) -> tuple[list[CurrencyRow], int]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("Items"), list):
+        raise EconomyError("Poe2Scout 通货分页数据格式不正确")
+    pages = payload.get("Pages")
+    current_page = payload.get("CurrentPage")
+    if (
+        isinstance(pages, bool)
+        or not isinstance(pages, int)
+        or pages < 0
+        or isinstance(current_page, bool)
+        or not isinstance(current_page, int)
+        or current_page < 1
+    ):
+        raise EconomyError("Poe2Scout 通货分页信息无效")
     rows: list[CurrencyRow] = []
-    for line in lines:
-        if not isinstance(line, dict):
+    for item in payload["Items"]:
+        if not isinstance(item, dict):
             continue
-        line_id = line.get("id")
-        if not isinstance(line_id, str) or line_id not in names:
+        name = item.get("Text")
+        if not isinstance(name, str) or not name.strip():
             continue
-        value = _finite_number(line.get("primaryValue"))
+        value = _finite_number(item.get("CurrentPrice"))
         if value is None or value <= 0:
             continue
-        sparkline = line.get("sparkline")
-        if not isinstance(sparkline, dict):
-            sparkline = {}
-        change = _finite_number(sparkline.get("totalChange"))
-        raw_trend = sparkline.get("data")
-        trend = (
-            tuple(number for value in raw_trend if (number := _finite_number(value)) is not None)[:14]
-            if isinstance(raw_trend, list)
-            else ()
-        )
-        item_name, details_id, image = names[line_id]
-        stable_key = (
-            currency_key(details_id)
-            if isinstance(details_id, str) and details_id
-            else currency_key(item_name)
-        )
+        api_id = item.get("ApiId")
+        stable_key = currency_key(api_id) if isinstance(api_id, str) else ""
+        raw_logs = item.get("PriceLogs")
+        logs: list[tuple[float | None, int, float]] = []
+        if isinstance(raw_logs, list):
+            for index, log in enumerate(raw_logs):
+                if not isinstance(log, dict):
+                    continue
+                price = _finite_number(log.get("Price"))
+                if price is None or price <= 0:
+                    continue
+                timestamp = _parse_timestamp(log.get("Time"))
+                logs.append((timestamp, index, price))
+        if logs and all(timestamp is not None for timestamp, _, _ in logs):
+            logs.sort(key=lambda entry: entry[0])
+        else:
+            # Poe2Scout currently returns newest-first; reverse for the chart.
+            logs.reverse()
+        trend = tuple(entry[2] for entry in logs[:14])
+        change = None
+        if len(trend) >= 2 and trend[0] > 0:
+            change = (trend[-1] / trend[0] - 1) * 100
+            if not math.isfinite(change):
+                change = None
         rows.append(
             CurrencyRow(
-                item_name[:90],
+                name.strip()[:90],
                 value,
                 change,
                 trend,
                 sort_key=stable_key,
-                category=category_label,
-                icon_url=safe_currency_icon_url(image),
+                category=category_label[:60],
+                icon_url=safe_currency_icon_url(item.get("IconUrl")),
             )
         )
-    if not rows and not allow_empty:
-        raise EconomyError("当前赛季没有可显示的通货价格")
-    rows.sort(key=lambda row: (-row.value, row.name))
-    generated_at = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
-    return CurrencySnapshot(
-        league=league[:100],
-        reference=reference[:90],
-        rows=tuple(rows),
-        total_count=len(rows),
-        generated_at=generated_at,
-    )
+    return rows, pages
+
+
+def _parse_timestamp(value: object) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+        timestamp = datetime.fromisoformat(normalized)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return timestamp.timestamp()
+    except (ValueError, OverflowError):
+        return None
 
 
 def _format_price(value: float) -> str:

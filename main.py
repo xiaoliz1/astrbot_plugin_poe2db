@@ -28,7 +28,7 @@ from .builds import (
 from .economy import (
     CurrencySnapshot,
     EconomyError,
-    NinjaEconomyClient,
+    Poe2ScoutEconomyClient,
     localize_currency_snapshot,
     render_currency_html,
 )
@@ -165,7 +165,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.22.9",
+    "1.22.10",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -177,7 +177,7 @@ class Poe2DBPlugin(Star):
         cache_minutes = _bounded_int(config.get("cache_minutes"), 15, 0, 60)
         self.client = Poe2DBClient(timeout, cache_minutes * 60)
         self.wiki = WikiClient(timeout, cache_minutes * 60)
-        self.economy = NinjaEconomyClient(timeout)
+        self.economy = Poe2ScoutEconomyClient(timeout)
         self.national_economy = PoECurrencyClient(timeout)
         self.builds_resolver = PoeNinjaBuildsResolver(timeout)
         self.poe_ninja_pob_resolver = PoeNinjaPobResolver(timeout)
@@ -692,7 +692,7 @@ class Poe2DBPlugin(Star):
         try:
             league_name = await self.economy.current_league_name()
         except EconomyError:
-            yield event.plain_result("暂时无法确认 poe.ninja 当前赛季，无法生成角色搜索链接，请稍后重试。")
+            yield event.plain_result("暂时无法确认当前赛季，无法生成角色搜索链接，请稍后重试。")
             return
         try:
             search_url = character_search_page_url(character_name, league_name)
@@ -780,7 +780,7 @@ class Poe2DBPlugin(Star):
                 league_name = await self.economy.current_league_name()
             except EconomyError:
                 yield event.plain_result(
-                    "暂时无法确认 poe.ninja 当前赛季，无法定位角色详情页，请稍后重试。"
+                    "暂时无法确认当前赛季，无法定位角色详情页，请稍后重试。"
                 )
                 return
         elif analysis_input.kind == "poe_ninja_pob":
