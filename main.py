@@ -172,7 +172,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.22.12",
+    "1.22.13",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -1284,7 +1284,7 @@ class Poe2DBPlugin(Star):
             try:
                 market_link = (
                     await self.client.find_unique_market_link(
-                        item.name, league_name, locale="cn"
+                        item.name, league_name, locale="us"
                     )
                     if league_name
                     else None
@@ -1300,6 +1300,7 @@ class Poe2DBPlugin(Star):
                         if market_link and market_link.article_url
                         else None
                     ),
+                    localized_mods=market_link.localized_mods if market_link else (),
                 )
             )
 

@@ -223,7 +223,11 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
                 <table><tr><td>The Market</td><td><a href="{stale_market_url}">The Market</a></td></tr></table>
               </div></body></html>""",
             cn_url: """<html><head><title>魔血 實用腰帶 - Poe2DB</title></head>
-              <body><div class="page-content"><h3>魔血</h3></div></body></html>""",
+              <body><div class="page-content"><h3>魔血</h3><div class="Stats">
+                <div class="implicitMod">具有 (1—3) 个<a>咒符</a>位</div>
+                <div class="explicitMod">20% 的药剂回复量立即生效</div>
+                <div class="explicitMod">Mages Legacy 继承</div>
+              </div></div></body></html>""",
         }
         client = FixtureClient(pages)
         client._resolved_urls[query_url] = us_url
@@ -232,6 +236,10 @@ class SiteParsingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result.chinese_name, "魔血")
+        self.assertEqual(
+            result.localized_mods,
+            ("具有 (1—3) 个咒符位", "20% 的药剂回复量立即生效"),
+        )
         self.assertEqual(
             result.url,
             "https://www.pathofexile.com/trade2/search/poe2/Forbidden%20Rites"

@@ -106,6 +106,27 @@ UNIQUE_ITEM_QUERY_ALIASES = {
     "法师之血": ("Mageblood",),
 }
 
+_UNIQUE_ITEM_MOD_TRANSLATIONS = {
+    "has (1-3) charm slots": "具有 (1—3) 个咒符位",
+    "(20-20)% of flask recovery applied instantly": "20% 的药剂回复量立即生效",
+    "all mage's legacies have (25-50)% increased effect per duplicate mage's legacy you have": "你每拥有一个重复的法师遗产，所有法师遗产效果提高 (25—50)%",
+}
+_MAGE_LEGACY_NAMES = {
+    "amethyst": "紫晶",
+    "basalt": "玄武岩",
+    "black sulphur": "黑锑",
+    "diamond": "钻石",
+    "gold": "黄金",
+    "granite": "坚岩",
+    "jade": "青玉",
+    "quicksilver": "水银",
+    "ruby": "红玉",
+    "sapphire": "蓝玉",
+    "silver": "白银",
+    "sulphur": "硫磺",
+    "topaz": "黄玉",
+}
+
 
 def _finite_number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -126,6 +147,38 @@ def currency_key(name: str) -> str:
 
 def _chinese_name_key(name: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", name).split()).casefold()
+
+
+def _translate_unique_item_mod(mod: str) -> str | None:
+    key = " ".join(unicodedata.normalize("NFKC", mod).split()).casefold()
+    translated = _UNIQUE_ITEM_MOD_TRANSLATIONS.get(key)
+    if translated:
+        return translated
+    match = re.fullmatch(r"legacy of ([a-z ]+)", key)
+    if match:
+        legacy_name = _MAGE_LEGACY_NAMES.get(match.group(1))
+        return f"{legacy_name}遗产" if legacy_name else None
+    return None
+
+
+def _chinese_unique_item_mods(
+    item: UniqueItemPrice, localized_mods: tuple[str, ...] = ()
+) -> tuple[str, ...]:
+    """Prefer Poe2DB's Chinese item text and translate known Poe2Scout labels."""
+    mods: list[str] = []
+    seen: set[str] = set()
+    candidates = [*localized_mods, *item.implicit_mods[:2], *item.explicit_mods[:6]]
+    for candidate in candidates:
+        text = candidate if any("\u3400" <= char <= "\u9fff" for char in candidate) else _translate_unique_item_mod(candidate)
+        if not text:
+            continue
+        key = re.sub(r"[\s—–-]+", "", unicodedata.normalize("NFKC", text)).casefold()
+        if key not in seen:
+            seen.add(key)
+            mods.append(text)
+        if len(mods) >= 8:
+            break
+    return tuple(mods)
 
 
 def _load_builtin_item_name_fallback(
@@ -340,6 +393,7 @@ def format_unique_item_price_reply(
     item: UniqueItemPrice,
     market_url: str | None = None,
     article_url: str | None = None,
+    localized_mods: tuple[str, ...] = (),
 ) -> str:
     """Format a concise Chinese single-item price reply."""
     title = item.chinese_name or item.name
@@ -352,15 +406,15 @@ def format_unique_item_price_reply(
         f"国际服当前价：{price}｜在售：{quantity}",
         f"7 日走势：{_format_price_history(item.price_history)}",
     ]
-    mods = [*item.implicit_mods[:2], *item.explicit_mods[:6]]
-    lines.append("主要词缀：" + ("；".join(mods) if mods else "暂无资料"))
+    mods = _chinese_unique_item_mods(item, localized_mods)
+    lines.append("主要词缀：" + ("；".join(mods) if mods else "暂无中文词缀资料"))
     article_url = article_url or item.poe2db_url
     if article_url:
         lines.append(f"Poe2DB 中文词条：{article_url}")
     if market_url:
-        lines.append(f"国服市集：{market_url}")
+        lines.append(f"国际服市集：{market_url}")
     else:
-        lines.append("国服市集：暂未找到可用链接")
+        lines.append("国际服市集：暂未找到可用链接")
     return "\n".join(lines)
 
 
@@ -627,17 +681,22 @@ class Poe2ScoutEconomyClient:
             raise EconomyError("物价网址不在允许范围内")
         request = Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
         opener = build_opener(_AllowedRedirects())
-        try:
-            with opener.open(request, timeout=self.timeout_seconds) as response:
-                if not self._allowed(response.geturl()):
-                    raise EconomyError("物价接口跳转到了指定来源范围以外")
-                if response.headers.get_content_type() not in ("application/json", "text/plain"):
-                    raise EconomyError("物价接口没有返回 JSON")
-                data = response.read(MAX_JSON_BYTES + 1)
-        except HTTPError as exc:
-            raise EconomyError(f"物价接口返回 HTTP {exc.code}") from exc
-        except (URLError, TimeoutError, OSError) as exc:
-            raise EconomyError("连接物价接口失败或超时") from exc
+        for attempt in range(2):
+            try:
+                with opener.open(request, timeout=self.timeout_seconds) as response:
+                    if not self._allowed(response.geturl()):
+                        raise EconomyError("物价接口跳转到了指定来源范围以外")
+                    if response.headers.get_content_type() not in ("application/json", "text/plain"):
+                        raise EconomyError("物价接口没有返回 JSON")
+                    data = response.read(MAX_JSON_BYTES + 1)
+                break
+            except HTTPError as exc:
+                raise EconomyError(f"物价接口返回 HTTP {exc.code}") from exc
+            except (URLError, TimeoutError, OSError) as exc:
+                if attempt == 0:
+                    time.sleep(0.5)
+                    continue
+                raise EconomyError("连接物价接口失败或超时") from exc
         if len(data) > MAX_JSON_BYTES:
             raise EconomyError("物价响应过大，已停止读取")
         try:

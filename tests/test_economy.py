@@ -4,6 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -271,14 +272,17 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
             item,
             market_url="https://trade.example/market",
             article_url="https://poe2db.tw/cn/Mageblood",
+            localized_mods=("具有 (1—3) 个咒符位", "20% 的药剂回复量立即生效"),
         )
 
         self.assertIn("国际服当前价：179.5 神圣石", reply)
         self.assertIn("在售：42 件", reply)
         self.assertIn("7 日走势：", reply)
-        self.assertIn("主要词缀：Has (1-3) Charm Slots；Legacy of Topaz", reply)
+        self.assertIn("主要词缀：具有 (1—3) 个咒符位；20% 的药剂回复量立即生效；黄玉遗产", reply)
+        self.assertNotIn("Has (1-3) Charm Slots", reply)
         self.assertIn("https://poe2db.tw/cn/Mageblood", reply)
         self.assertIn("https://trade.example/market", reply)
+        self.assertIn("国际服市集：https://trade.example/market", reply)
         self.assertEqual(scout_item_reference("Mageblood"), ("法师之血 万用腰带", "https://poe2db.tw/cn/Mageblood"))
 
     def test_price_parser_reads_logs_oldest_first_and_normalizes_cdn_icon(self):
@@ -349,6 +353,39 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         with patch("astrbot_plugin_poe2db.economy.build_opener", return_value=Opener()):
             with self.assertRaises(EconomyError):
                 Poe2ScoutEconomyClient()._download_sync(LEAGUES_URL)
+
+    def test_download_retries_once_after_transient_connection_error(self):
+        class Response:
+            headers = type("Headers", (), {"get_content_type": lambda self: "application/json"})()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def geturl(self):
+                return LEAGUES_URL
+
+            def read(self, _limit):
+                return b"{}"
+
+        class Opener:
+            attempts = 0
+
+            def open(self, _request, timeout):
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise URLError("temporary network failure")
+                return Response()
+
+        opener = Opener()
+        with patch("astrbot_plugin_poe2db.economy.build_opener", return_value=opener):
+            with patch("astrbot_plugin_poe2db.economy.time.sleep"):
+                result = Poe2ScoutEconomyClient()._download_sync(LEAGUES_URL)
+
+        self.assertEqual(result, {})
+        self.assertEqual(opener.attempts, 2)
 
     def test_image_markup_escapes_remote_names(self):
         rows, _ = parse_scout_currency_page(

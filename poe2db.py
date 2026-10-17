@@ -43,6 +43,7 @@ class MarketLink:
     chinese_name: str | None
     url: str
     article_url: str | None = None
+    localized_mods: tuple[str, ...] = ()
 
 
 def search_url(term: str, locale: str = "cn") -> str:
@@ -386,7 +387,11 @@ class Poe2DBClient:
                     )
                     if market_url:
                         return MarketLink(
-                            name, chinese_name, market_url, article_url=chinese_url
+                            name,
+                            chinese_name,
+                            market_url,
+                            article_url=chinese_url,
+                            localized_mods=self._localized_item_mods(chinese_soup),
                         )
                     continue
 
@@ -398,8 +403,19 @@ class Poe2DBClient:
                 )
                 if not market_url:
                     continue
-                chinese_name = await self._chinese_title_for_us_article(article_url)
-                return MarketLink(name, chinese_name, market_url)
+                chinese_article = await self._chinese_article_for_us_article(article_url)
+                chinese_name = chinese_article[2] if chinese_article else None
+                localized_mods = (
+                    self._localized_item_mods(chinese_article[1])
+                    if chinese_article
+                    else ()
+                )
+                return MarketLink(
+                    name,
+                    chinese_name,
+                    market_url,
+                    localized_mods=localized_mods,
+                )
         except Poe2DBError:
             return None
         return None
@@ -407,6 +423,34 @@ class Poe2DBClient:
     async def _chinese_title_for_us_article(self, article_url: str) -> str | None:
         article = await self._chinese_article_for_us_article(article_url)
         return article[2] if article else None
+
+    @staticmethod
+    def _localized_item_mods(soup: BeautifulSoup) -> tuple[str, ...]:
+        """Read Simplified Chinese implicit/explicit mods from the item card."""
+        stats = soup.select_one(".page-content .Stats") or soup.select_one(".Stats")
+        if not stats:
+            return ()
+        mods: list[str] = []
+        seen: set[str] = set()
+        for node in stats.select(".implicitMod, .explicitMod"):
+            text = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+            text = re.sub(r"\s*([—–-])\s*", r"\1", text)
+            text = re.sub(r"\s+([%％，,。；：、])", r"\1", text)
+            text = re.sub(r"([（(])\s+", r"\1", text)
+            text = re.sub(r"\s+([）)])", r"\1", text)
+            text = re.sub(
+                r"(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])", "", text
+            )
+            text = re.sub(r"(?<=[，,。；：、])\s+", "", text)
+            if not text or re.search(r"[A-Za-z]{2,}", text):
+                continue
+            key = re.sub(r"\s+", "", text).casefold()
+            if key not in seen:
+                seen.add(key)
+                mods.append(text)
+            if len(mods) >= 8:
+                break
+        return tuple(mods)
 
     async def _chinese_article_for_us_article(
         self, article_url: str
