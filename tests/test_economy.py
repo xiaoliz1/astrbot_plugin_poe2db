@@ -26,6 +26,7 @@ from astrbot_plugin_poe2db.economy import (
     safe_currency_icon_url,
     scout_item_english_names,
     scout_item_reference,
+    scout_item_search_names,
     scout_item_traditional_name,
 )
 
@@ -254,6 +255,40 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(items[0].price_history, (160.0, 179.5))
         self.assertEqual(items[0].implicit_mods, ("Has (1-3) Charm Slots",))
         self.assertEqual(items[0].icon_url, "https://web.poecdn.com/gen/image/Mageblood.png")
+
+    async def test_unique_item_price_accepts_short_localized_and_english_names_without_quotes(self):
+        searched = []
+
+        class FixtureClient(Poe2ScoutEconomyClient):
+            async def _current_league(self, force_refresh=False):
+                return "Forbidden Rites"
+
+            async def _get_json(self, url, cache_seconds, force_refresh=False):
+                if url.endswith("/Items/Categories"):
+                    return {"UniqueCategories": [{"ApiId": "accessory"}]}
+                query = parse_qs(urlsplit(url).query)
+                searched.append(query["search"][0])
+                return {"Items": []}
+
+        for query in (
+            "贝雷克的冰与雷之曲",
+            "贝雷克的冰與雷之曲",
+            "貝雷克的冰與雷之曲",
+            "Berek's Grip",
+        ):
+            searched.clear()
+            items = await FixtureClient().unique_item_prices(query)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0].name, "Berek's Grip")
+            self.assertEqual(items[0].chinese_name, "贝雷克的冰与雷之曲 双玉戒指")
+            self.assertEqual(items[0].traditional_name, "貝雷克的冰與雷之曲 雙玉戒指")
+            self.assertIsNone(items[0].current_price)
+            self.assertEqual(searched[0], "Berek's Grip")
+
+        reply = format_unique_item_price_reply(items[0])
+        self.assertIn("国际服当前价：暂无报价", reply)
+        self.assertIn("https://poe2db.tw/cn/Bereks_Grip", reply)
+
 
     def test_unique_item_reply_formats_price_history_mods_and_market_links(self):
         item = UniqueItemPrice(
@@ -496,6 +531,11 @@ class EconomyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Mirror of Kalandra", scout_item_english_names("卡兰德的魔镜"))
         self.assertEqual(scout_item_traditional_name("Mageblood"), "魔血 實用腰帶")
         self.assertIn("Mageblood Utility Belt", scout_item_english_names("魔血 實用腰帶"))
+        self.assertIn("Berek's Grip", scout_item_english_names("贝雷克的冰与雷之曲"))
+        self.assertIn("Berek's Grip", scout_item_english_names("贝雷克的冰與雷之曲"))
+        self.assertIn("Berek's Grip", scout_item_english_names("貝雷克的冰與雷之曲"))
+        self.assertEqual(scout_item_search_names("贝雷克的冰與雷之曲")[0], "Berek's Grip")
+        self.assertEqual(scout_item_search_names("Berek's Grip")[0], "Berek's Grip")
 
     def test_builtin_name_fallback_localizes_when_national_names_are_missing(self):
         snapshot = CurrencySnapshot(

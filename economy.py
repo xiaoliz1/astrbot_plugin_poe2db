@@ -150,6 +150,46 @@ def _chinese_name_key(name: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", name).split()).casefold()
 
 
+def _localized_item_name_aliases(
+    chinese: str | None,
+    traditional: str | None,
+) -> set[str]:
+    """Index full, base-less, and mixed-script variants of paired labels."""
+    labels = [
+        value.strip()
+        for value in (chinese, traditional)
+        if isinstance(value, str)
+        and value.strip()
+        and any("\u3400" <= char <= "\u9fff" for char in value)
+    ]
+    aliases = set(labels)
+    prefixes = {label.split(maxsplit=1)[0] for label in labels}
+    aliases.update(prefixes)
+
+    if len(labels) == 2 and len(labels[0]) == len(labels[1]):
+        differing = sum(left != right for left, right in zip(labels[0], labels[1]))
+        if differing <= 6:
+            variants = {""}
+            for left, right in zip(labels[0], labels[1]):
+                choices = {left, right}
+                variants = {prefix + char for prefix in variants for char in choices}
+            aliases.update(variants)
+
+        left_prefix = labels[0].split(maxsplit=1)[0]
+        right_prefix = labels[1].split(maxsplit=1)[0]
+        if len(left_prefix) == len(right_prefix):
+            differing = sum(left != right for left, right in zip(left_prefix, right_prefix))
+            if differing <= 6:
+                variants = {""}
+                for left, right in zip(left_prefix, right_prefix):
+                    choices = {left, right}
+                    variants = {
+                        prefix + char for prefix in variants for char in choices
+                    }
+                aliases.update(variants)
+    return {alias for alias in aliases if alias}
+
+
 def _translate_unique_item_mod(mod: str) -> str | None:
     key = " ".join(unicodedata.normalize("NFKC", mod).split()).casefold()
     translated = _UNIQUE_ITEM_MOD_TRANSLATIONS.get(key)
@@ -184,43 +224,63 @@ def _chinese_unique_item_mods(
 
 def _load_builtin_item_name_fallback(
     path: Path | None = None,
-) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
-    """Load unambiguous English->CN and CN->English names shipped with the plugin."""
+) -> tuple[
+    dict[str, str],
+    dict[str, tuple[str, ...]],
+    dict[str, tuple[str, ...]],
+]:
+    """Load localized aliases and Poe2Scout search labels shipped with the plugin."""
     source_path = path or Path(__file__).with_name("item_name_fallback.json")
     try:
         payload = json.loads(source_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}, {}
+        return {}, {}, {}
     rows = payload.get("items") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
-        return {}, {}
+        return {}, {}, {}
 
     english_candidates: dict[str, set[str]] = {}
     chinese_candidates: dict[str, set[str]] = {}
+    english_search_candidates: dict[str, set[str]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
         english = row.get("english")
         if not isinstance(english, str) or not english.strip():
             continue
-        english_key = currency_key(english)
-        if not english_key:
+        english = english.strip()
+        short_english = row.get("name")
+        if not isinstance(short_english, str) or not short_english.strip():
+            short_english = english
+        else:
+            short_english = short_english.strip()
+        english_labels = tuple(dict.fromkeys((short_english, english)))
+        english_keys = tuple(
+            dict.fromkeys(
+                key for label in english_labels if (key := currency_key(label))
+            )
+        )
+        if not english_keys:
             continue
+
         chinese = row.get("chinese")
+        traditional = row.get("traditional")
+        localized_aliases = _localized_item_name_aliases(chinese, traditional)
+
         if (
             isinstance(chinese, str)
             and chinese.strip()
             and any("\u3400" <= char <= "\u9fff" for char in chinese)
         ):
-            english_candidates.setdefault(english_key, set()).add(chinese)
-            chinese_candidates.setdefault(_chinese_name_key(chinese), set()).add(english)
-        traditional = row.get("traditional")
-        if (
-            isinstance(traditional, str)
-            and traditional.strip()
-            and any("\u3400" <= char <= "\u9fff" for char in traditional)
-        ):
-            chinese_candidates.setdefault(_chinese_name_key(traditional), set()).add(english)
+            for english_key in english_keys:
+                english_candidates.setdefault(english_key, set()).add(chinese.strip())
+
+        for english_key in english_keys:
+            english_search_candidates.setdefault(english_key, set()).update(english_labels)
+        for alias in localized_aliases:
+            alias_key = _chinese_name_key(alias)
+            if alias_key:
+                chinese_candidates.setdefault(alias_key, set()).update(english_labels)
 
     english_to_chinese = {
         key: next(iter(values))
@@ -228,13 +288,21 @@ def _load_builtin_item_name_fallback(
         if len(values) == 1
     }
     chinese_to_english = {
-        key: tuple(sorted(values, key=str.casefold))
+        key: tuple(sorted(values, key=lambda value: (len(value), value.casefold())))
         for key, values in chinese_candidates.items()
     }
-    return english_to_chinese, chinese_to_english
+    english_to_search = {
+        key: tuple(sorted(values, key=lambda value: (len(value), value.casefold())))
+        for key, values in english_search_candidates.items()
+    }
+    return english_to_chinese, chinese_to_english, english_to_search
 
 
-SCOUT_ITEM_NAME_EN_TO_ZH, SCOUT_ITEM_NAME_ZH_TO_EN = _load_builtin_item_name_fallback()
+(
+    SCOUT_ITEM_NAME_EN_TO_ZH,
+    SCOUT_ITEM_NAME_ZH_TO_EN,
+    SCOUT_ITEM_NAME_EN_TO_SEARCH,
+) = _load_builtin_item_name_fallback()
 
 
 def _load_builtin_item_traditional_names(
@@ -279,6 +347,13 @@ SCOUT_ITEM_NAME_EN_TO_TW = _load_builtin_item_traditional_names()
 def scout_item_english_names(chinese_name: str) -> tuple[str, ...]:
     """Return Poe2Scout English labels for an exact bundled CN or TW item name."""
     return SCOUT_ITEM_NAME_ZH_TO_EN.get(_chinese_name_key(chinese_name), ())
+
+
+def scout_item_search_names(item_name: str) -> tuple[str, ...]:
+    """Resolve a bundled CN/TW or English alias to Poe2Scout search labels."""
+    if any("\u3400" <= char <= "\u9fff" for char in item_name):
+        return scout_item_english_names(item_name)
+    return SCOUT_ITEM_NAME_EN_TO_SEARCH.get(currency_key(item_name), ())
 
 
 def scout_item_traditional_name(english_name: str) -> str | None:
@@ -342,6 +417,34 @@ SCOUT_ITEM_REFERENCES = _load_builtin_item_references()
 def scout_item_reference(english_name: str) -> tuple[str, str] | None:
     """Return a bundled Chinese title and article URL for an exact item name."""
     return SCOUT_ITEM_REFERENCES.get(currency_key(english_name))
+
+
+def _builtin_unique_item_price(query: str) -> UniqueItemPrice | None:
+    """Build a name-and-link result when Poe2Scout has no current quote."""
+    search_names = scout_item_search_names(query)
+    matches: dict[str, tuple[str, tuple[str, str]]] = {}
+    for english_name in search_names:
+        reference = scout_item_reference(english_name)
+        if reference:
+            matches.setdefault(reference[1], (english_name, reference))
+    if len(matches) != 1:
+        return None
+
+    english_name, (chinese_name, article_url) = next(iter(matches.values()))
+    return UniqueItemPrice(
+        name=english_name,
+        text=english_name,
+        chinese_name=chinese_name,
+        base_type=None,
+        current_price=None,
+        current_quantity=None,
+        icon_url=None,
+        implicit_mods=(),
+        explicit_mods=(),
+        price_history=(),
+        poe2db_url=article_url,
+        traditional_name=scout_item_traditional_name(english_name),
+    )
 
 
 def _safe_item_mods(value: object, limit: int = 8) -> tuple[str, ...]:
@@ -672,7 +775,7 @@ class Poe2ScoutEconomyClient:
             ),
             (),
         )
-        search_terms = alias_terms or scout_item_english_names(query) or (query,)
+        search_terms = alias_terms or scout_item_search_names(query) or (query,)
         league_name = await self._current_league(force_refresh)
         league_path = quote(league_name, safe="")
         categories_url = (
@@ -733,6 +836,9 @@ class Poe2ScoutEconomyClient:
                     exact[(parsed.name.casefold(), parsed.base_type, parsed.text.casefold())] = parsed
 
         if not exact:
+            fallback_item = _builtin_unique_item_price(query)
+            if fallback_item:
+                return (fallback_item,)
             raise EconomyError("没有找到精确匹配的传奇物品，请检查名称或尝试英文名")
         return tuple(exact.values())
 

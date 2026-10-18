@@ -2,7 +2,7 @@ name: astrbot_plugin_poe2db
 display_name: 流放之路2资料问答
 short_desc: 查询游戏资料与物价，跟踪官方公告并分析角色构筑。
 desc: 查询《流放之路 2》资料、物价与角色构筑。/poe2 联网回答问题，遇到多个相近词条时可先选择，并在有图片时附图；/poe2search 搜索技能、装备等词条并返回摘要和来源。/poe2价 查询传奇装备实时价格、在售数量、价格走势、中文词缀、简繁体名称和 Poe2DB 词条，并附国际服市集链接；/poe2bd 按角色名查找 poe.ninja 当前赛季角色，返回详情页和简体中文 Build 链接；/poe2分析 支持角色名及 poe.ninja、WeGame 构筑链接，生成中文分析，并附上传奇装备与珠宝的 Poe2DB 市集链接，公开 poe.ninja 构筑还可附官方预览图。物价命令提供国际服和国服神圣石价格图片，支持自动采集、手动采集及群通知；还可定时推送 GGG 官方赛季与 Patch 公告。
-version: v1.22.14
+version: v1.22.15
 author: xiaoliz1
 repo: https://github.com/xiaoliz1/astrbot_plugin_poe2db
 astrbot_version: ">=4.24.2,<5"
