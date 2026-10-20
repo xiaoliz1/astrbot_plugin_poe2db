@@ -715,7 +715,8 @@ class Poe2DBPlugin(Star):
             profile_url = None
         if not profile_url:
             yield event.plain_result(
-                "没有找到唯一匹配的角色详情页，暂时无法生成角色专属中文 Build。\n"
+                "Poe.ninja 当前赛季公开 Builds 搜索没有返回唯一角色详情页；"
+                "请核对角色名、公开状态，或确认是否有重名。\n"
                 f"poe.ninja 搜索：{search_url}\n"
                 f"Poe2DB 中文 PoB 手动导入：{POE2DB_POB_IMPORT_URL}"
             )
@@ -812,7 +813,8 @@ class Poe2DBPlugin(Star):
                 profile_url = None
             if not profile_url:
                 yield event.plain_result(
-                    "没有找到唯一匹配的角色详情页，请先在 poe.ninja 筛选页确认角色名：\n"
+                    "Poe.ninja 当前赛季公开 Builds 搜索没有返回唯一角色详情页；"
+                    "请核对角色名、公开状态，或确认是否有重名：\n"
                     + search_url
                 )
                 return

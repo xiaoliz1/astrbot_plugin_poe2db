@@ -5,6 +5,8 @@ import sys
 import unittest
 import zlib
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -16,6 +18,7 @@ from astrbot_plugin_poe2db.builds import (
     is_public_character_profile_url,
     normalize_visible_pob_code,
     parse_pob_unique_items,
+    PoeNinjaBuildsResolver,
 )
 
 
@@ -104,6 +107,49 @@ class CharacterSearchUrlTests(unittest.TestCase):
                 "九球天后莉莉丝", "Forbidden Rites", results
             )
         )
+
+
+class BrowserLaunchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_falls_back_to_system_chromium_when_playwright_browser_is_missing(self):
+        resolver = PoeNinjaBuildsResolver()
+        browser = object()
+        playwright = Mock()
+        playwright.chromium.launch = AsyncMock(
+            side_effect=[FileNotFoundError("bundled Chromium is missing"), browser]
+        )
+        playwright.stop = AsyncMock()
+
+        startup = Mock()
+        startup.start = AsyncMock(return_value=playwright)
+        fake_playwright_module = ModuleType("playwright")
+        fake_playwright_module.__path__ = []
+        fake_async_api_module = ModuleType("playwright.async_api")
+        fake_async_api_module.async_playwright = Mock(return_value=startup)
+
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "playwright": fake_playwright_module,
+                    "playwright.async_api": fake_async_api_module,
+                },
+            ),
+            patch(
+                "astrbot_plugin_poe2db.builds._find_system_chromium",
+                return_value="/usr/bin/chromium",
+            ),
+        ):
+            result = await resolver._get_browser()
+
+        self.assertIs(result, browser)
+        self.assertEqual(
+            [call.kwargs for call in playwright.chromium.launch.await_args_list],
+            [
+                {"headless": True},
+                {"headless": True, "executable_path": "/usr/bin/chromium"},
+            ],
+        )
+        playwright.stop.assert_not_awaited()
 
 
 class PublicBuildPageTextTests(unittest.TestCase):

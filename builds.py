@@ -6,6 +6,7 @@ import asyncio
 import base64
 import logging
 import re
+import shutil
 import time
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -164,6 +165,20 @@ def _bounded_pob_inflate(compressed: bytes) -> bytes | None:
 
 def _league_slug(league_name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", league_name.casefold())
+
+
+def _find_system_chromium() -> str | None:
+    """Return a system Chromium executable when Playwright's browser is absent."""
+    for executable_name in (
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+    ):
+        executable_path = shutil.which(executable_name)
+        if executable_path:
+            return executable_path
+    return None
 
 
 def _normalized_name(name: str) -> str:
@@ -607,7 +622,20 @@ class PoeNinjaBuildsResolver:
 
         self._playwright = await async_playwright().start()
         try:
-            self._browser = await self._playwright.chromium.launch(headless=True)
+            try:
+                self._browser = await self._playwright.chromium.launch(headless=True)
+            except Exception as bundled_error:
+                system_chromium = _find_system_chromium()
+                if not system_chromium:
+                    raise
+                LOGGER.warning(
+                    "Playwright Chromium is unavailable; trying system Chromium (%s)",
+                    type(bundled_error).__name__,
+                )
+                self._browser = await self._playwright.chromium.launch(
+                    headless=True,
+                    executable_path=system_chromium,
+                )
         except Exception:
             await self._playwright.stop()
             self._playwright = None
