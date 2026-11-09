@@ -29,6 +29,37 @@
     "hint": "开启后，在每日通知时段检查 GGG 官方 PoE2 公告和 Patch Notes，并向相同群名单发送新公告。首次成功检查只记录当前帖子，不补发历史公告；群名单、通知时段及时区沿用下方物价通知配置。",
     "default": false
   },
+  "poe2_launch_reminder_enabled": {
+    "type": "bool",
+    "description": "启用 PoE2 开服提醒",
+    "hint": "开启后，在官方公布的开服日期 / 时间向下方相同群名单提醒一次。只公布日期时，会在该日期按开服时区开始时发送，并明确说明具体时刻尚未确认；群名单沿用物价通知配置。默认关闭。",
+    "default": false
+  },
+  "poe2_launch_date": {
+    "type": "text",
+    "description": "PoE2 官方开服日期",
+    "hint": "使用 YYYY-MM-DD。当前预填 GGG 公告的 2026-12-11（PST）；后续日期变更时请按官方公告更新。",
+    "default": "2026-12-11"
+  },
+  "poe2_launch_time": {
+    "type": "text",
+    "description": "PoE2 官方开服时间",
+    "hint": "官方公布具体时刻后填写 24 小时制 HH:MM；当前公告只有日期，留空即可。留空时倒计时到该日期开始，提醒文案不会声称服务器已开放。",
+    "default": ""
+  },
+  "poe2_launch_utc_offset": {
+    "type": "float",
+    "description": "开服时间 UTC 偏移小时数",
+    "hint": "填写官方公告使用的时区偏移；当前公告标注 PST，使用 -8。官方给出具体时间后按其时区调整。",
+    "default": -8,
+    "slider": {"min": -12, "max": 14, "step": 0.5}
+  },
+  "poe2_launch_source_url": {
+    "type": "text",
+    "description": "开服时间官方公告链接",
+    "hint": "倒计时和群提醒会附上此链接。",
+    "default": "https://www.pathofexile.com/forum/view-thread/4012710"
+  },
   "price_notification_mode": {
     "type": "string",
     "description": "群通知名单模式",

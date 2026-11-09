@@ -1,6 +1,6 @@
 # 流放之路2资料问答（AstrBot 插件）
 
-插件用于查询《流放之路 2》资料、价格和角色构筑。`/poe2` 联网回答问题并在有匹配图片时附图；`/poe2search` 搜索词条并返回摘要、来源链接和可用图片；`/poe2bd` 查找 poe.ninja 当前赛季角色并返回 Poe2DB 简体中文 Build 链接；`/poe2分析` 支持角色名、poe.ninja 角色或 PoB 链接、WeGame 分享链接，生成中文构筑分析并附传奇物品市集链接；分析公开 poe.ninja 构筑成功时还会附上其官方预览图。`/poe2 国际服物价` 和 `/poe2 国服物价` 返回神圣石价格图片，支持定时采集、手动采集与群通知。资料优先来自 [Poe2DB 简体中文站](https://poe2db.tw/cn/)，并检索 [Poe2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki)。
+插件用于查询《流放之路 2》资料、价格和角色构筑。`/poe2` 联网回答问题并在有匹配图片时附图；`/poe2search` 搜索词条并返回摘要、来源链接和可用图片；`/poe2bd` 查找 poe.ninja 当前赛季角色并返回 Poe2DB 简体中文 Build 链接；`/poe2分析` 支持角色名、poe.ninja 角色或 PoB 链接、WeGame 分享链接，生成中文构筑分析并附传奇物品市集链接；分析公开 poe.ninja 构筑成功时还会附上其官方预览图。`/poe2开服` 显示 GGG 官方公布的开服倒计时；可选开启群提醒，并沿用现有群名单模式。`/poe2 国际服物价` 和 `/poe2 国服物价` 返回神圣石价格图片，支持定时采集、手动采集与群通知。资料优先来自 [Poe2DB 简体中文站](https://poe2db.tw/cn/)，并检索 [Poe2Wiki](https://www.poe2wiki.net/wiki/Path_of_Exile_2_Wiki)。
 
 `/poe2价 传奇名` 可查传奇装备的国际服神圣石实时价格、在售数量、七日走势、主要词缀和图标，支持内置简繁中英文名称及不带底材的别名查询，并提供 Poe2DB 简体与繁体名称、简体词条及国际服市集链接；若 Poe2Scout 暂无报价，仍会返回匹配到的物品词条和市集链接。例如 `/poe2价 魔血`、`/poe2价 贝雷克的冰与雷之曲` 或 `/poe2价 Berek's Grip`。
 
@@ -141,6 +141,12 @@ AstrBot 4.29.0 搭配 ChatGPT Codex 模型插件 1.0.4 时，`/poe2分析` 的�
 在 AstrBot 插件配置中开启 **启用赛季 / Patch 公告自动通知**。插件会定时检查 [GGG 官方 PoE2 公告区](https://www.pathofexile.com/forum/view-forum/2211)和 [Patch Notes 区](https://www.pathofexile.com/forum/view-forum/2212)，在公告区筛选赛季、联赛、更新和发布相关标题，并跟踪 Patch Notes。发现新帖子后，会在配置的通知时段向相同群名单推送官方标题和原帖链接。
 
 此功能独立于物价自动通知开关；群名单模式、群号 / 群会话列表、每日通知时段及时区沿用上方配置。首次成功检查会将当前帖子设为基线，不发送旧公告；此后发现的新公告会保存到插件数据目录并逐群记录送达状态，发送失败时保留待发内容并在 15 分钟后重试。GGG 官方标题按原文显示，链接指向官方论坛。
+
+### 开服倒计时与提醒
+
+发送 `/poe2开服` 可查看开服倒计时。当前 GGG 已公布 PoE2 将于 **2026-12-11（PST）** 免费开放，但尚未给出具体开服时刻，因此默认倒计时到 PST 当天 00:00；回复和群提醒都会明确说明这只是官方公布日期的开始，不代表服务器已实际开放。官方公告：[ExileCon 2026 Announcements](https://www.pathofexile.com/forum/view-thread/4012710)。
+
+如要在群内提醒，在 AstrBot 配置中开启 **启用 PoE2 开服提醒**。提醒复用上方的群名单模式、目标群和平台配置；每个群只发送一次，失败时每 15 分钟重试，成功送达状态保存在插件数据目录。官方公布具体时间后，可填写 `HH:MM` 和对应 UTC 偏移；公告日期或时区发生变化时也需同步更新配置。
 
 普通问答只按需读取 Poe2DB 与 PoE2Wiki；物价图片由后台每小时分别从 Poe2Scout、poecurrency.top 读取数据并预生成，不请求 Poe2DB 经济页面。插件不打包完整站点数据库；内置物品名称表包含 Poe2Scout 当前赛季的目录字段、可明确配对的简体 / 英文名称、PoE2Wiki 词条链接，以及按生成时当前赛季构造的官方 Trade 搜索链接。无法可靠构造 Trade 链接的条目留空；赛季更替后可重新运行生成脚本更新链接。中文名称来源为 [Poe2DB 简体](https://poe2db.tw/cn/)及[英文](https://poe2db.tw/us/)词条页。Poe2DB 内容归 poe2db.tw，采用 [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/) 授权。
 

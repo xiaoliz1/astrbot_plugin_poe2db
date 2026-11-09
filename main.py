@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
@@ -47,6 +47,14 @@ from .official_updates import (
     OfficialUpdateStore,
     fetch_official_updates,
     format_official_update_notice,
+)
+from .launch_schedule import (
+    LaunchReminderStore,
+    Poe2LaunchSchedule,
+    LaunchScheduleError,
+    format_launch_countdown,
+    format_launch_reminder,
+    load_launch_schedule,
 )
 from .pob_share import (
     POE2DB_POB_IMPORT_URL,
@@ -164,7 +172,7 @@ class _SenderSessionFilter(SessionFilter):
     "astrbot_plugin_poe2db",
     "xiaoliz1",
     "流放之路2资料问答",
-    "1.22.17",
+    "1.22.18",
     "https://github.com/xiaoliz1/astrbot_plugin_poe2db",
 )
 class Poe2DBPlugin(Star):
@@ -185,6 +193,7 @@ class Poe2DBPlugin(Star):
         self._price_snapshots: dict[str, CurrencySnapshot] = {}
         data_dir = StarTools.get_data_dir("astrbot_plugin_poe2db")
         self._official_update_store = OfficialUpdateStore(data_dir)
+        self._launch_reminder_store = LaunchReminderStore(data_dir)
         self.pob_share_client = Poe2DBPobClient(timeout, data_dir)
         self.build_analysis_service = BuildAnalysisService(
             context=context,
@@ -225,6 +234,9 @@ class Poe2DBPlugin(Star):
         self._official_update_task = asyncio.create_task(
             self._official_update_loop()
         )
+        self._launch_reminder_task = asyncio.create_task(
+            self._launch_reminder_loop()
+        )
 
     async def terminate(self) -> None:
         """Stop background price tasks when AstrBot unloads the plugin."""
@@ -234,6 +246,7 @@ class Poe2DBPlugin(Star):
                 self._price_refresh_task,
                 self._manual_price_refresh_task,
                 self._official_update_task,
+                self._launch_reminder_task,
             )
             if task is not None and not task.done()
         ]
@@ -471,6 +484,76 @@ class Poe2DBPlugin(Star):
             return value.strip().casefold() in {"1", "true", "yes", "on", "是"}
         return bool(value)
 
+    def _launch_reminder_enabled(self) -> bool:
+        value = self.config.get("poe2_launch_reminder_enabled", False)
+        if isinstance(value, str):
+            return value.strip().casefold() in {"1", "true", "yes", "on", "是"}
+        return bool(value)
+
+    def _warn_launch_reminder(self, source: str, error: object) -> None:
+        plugin_logger = getattr(self, "logger", None)
+        if plugin_logger and hasattr(plugin_logger, "warning"):
+            plugin_logger.warning(f"PoE2 开服提醒{source}失败：{error}")
+
+    async def _launch_reminder_loop(self) -> None:
+        """Send one launch reminder to each configured notification group."""
+        while True:
+            if not self._launch_reminder_enabled():
+                await asyncio.sleep(60)
+                continue
+
+            try:
+                schedule = load_launch_schedule(self.config)
+                self._launch_reminder_store.prepare_event(schedule.event_id)
+                now = datetime.now(timezone.utc)
+                target = schedule.scheduled_at.astimezone(timezone.utc)
+                remaining = (target - now).total_seconds()
+                if remaining > 0:
+                    await asyncio.sleep(min(remaining, 60 * 60))
+                    continue
+                if now - target > timedelta(hours=24):
+                    await asyncio.sleep(60 * 60)
+                    continue
+
+                sent = await self._send_launch_reminder(schedule)
+                await asyncio.sleep(60 * 60 if sent else 15 * 60)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._warn_launch_reminder("定时检查", exc)
+                await asyncio.sleep(15 * 60)
+
+    async def _send_launch_reminder(
+        self, schedule: Poe2LaunchSchedule
+    ) -> bool:
+        destinations = self._price_notification_destinations()
+        if not destinations:
+            self._warn_launch_reminder(
+                "通知", "没有可发送的群会话，请检查群通知名单和平台配置"
+            )
+            return False
+
+        complete = True
+        for destination in destinations:
+            if not self._launch_reminder_store.pending_for(destination):
+                continue
+            try:
+                message = MessageChain().message(format_launch_reminder(schedule))
+                sent = await self.context.send_message(destination, message)
+                if sent:
+                    self._launch_reminder_store.mark_delivered(destination)
+                else:
+                    complete = False
+                    self._warn_launch_reminder(
+                        "通知", f"未找到可发送到会话的平台：{destination}"
+                    )
+            except Exception as exc:
+                complete = False
+                self._warn_launch_reminder(
+                    "通知", f"发送到 {destination} 失败：{exc}"
+                )
+        return complete
+
     def _warn_official_update(self, source: str, error: object) -> None:
         plugin_logger = getattr(self, "logger", None)
         if plugin_logger and hasattr(plugin_logger, "warning"):
@@ -690,6 +773,17 @@ class Poe2DBPlugin(Star):
                 self._warn_price_refresh(
                     "物价通知", f"发送到 {destination} 失败：{exc}"
                 )
+
+    @filter.command("poe2开服")
+    async def poe2_launch_countdown(self, event: AstrMessageEvent):
+        """显示 PoE2 官方公布的开服日期倒计时。用法：/poe2开服。"""
+        self._remember_group_session(event)
+        try:
+            schedule = load_launch_schedule(self.config)
+        except LaunchScheduleError as exc:
+            yield event.plain_result(f"开服倒计时配置无效：{exc}")
+            return
+        yield event.plain_result(format_launch_countdown(schedule))
 
     @filter.command("poe2bd")
     async def poe2bd(self, event: AstrMessageEvent):
@@ -1086,6 +1180,7 @@ class Poe2DBPlugin(Star):
                 "/poe2 问题\n"
                 "/poe2 国际服物价\n"
                 "/poe2 国服物价\n"
+                "/poe2开服\n"
                 "/poe2价 传奇名\n"
                 "/poe2bd 角色名\n"
                 "/poe2分析 角色名\n"
